@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 
 from config.settings import settings
 from core.logging import logger
-from core.company_filter import is_matching_company_size, classify_company_size
+from core.company_filter import is_matching_company_size, classify_company_size, detect_job_type_filter
 from db.mongo import mongo_manager
 from db.models import RawJobPosting, EnrichedLead
 from enrichment.agent import LeadEnrichmentAgent
@@ -300,24 +300,25 @@ def get_stats():
 
     try:
         mongo_manager.connect()
-        db_connected = True
-        leads_count = mongo_manager.leads_collection.count_documents({})
-        raw_count = mongo_manager.raw_jobs_collection.count_documents({})
+        if mongo_manager.leads_collection is not None and mongo_manager.raw_jobs_collection is not None:
+            db_connected = True
+            leads_count = mongo_manager.leads_collection.count_documents({})
+            raw_count = mongo_manager.raw_jobs_collection.count_documents({})
 
-        # Aggregate total contacts and average score
-        pipeline = [
-            {
-                "$group": {
-                    "_id": None,
-                    "avg_score": {"$avg": "$relevance_score"},
-                    "total_contacts": {"$sum": {"$size": {"$ifNull": ["$contacts", []]}}}
+            # Aggregate total contacts and average score
+            pipeline = [
+                {
+                    "$group": {
+                        "_id": None,
+                        "avg_score": {"$avg": "$relevance_score"},
+                        "total_contacts": {"$sum": {"$size": {"$ifNull": ["$contacts", []]}}}
+                    }
                 }
-            }
-        ]
-        agg_result = list(mongo_manager.leads_collection.aggregate(pipeline))
-        if agg_result:
-            avg_score = round(agg_result[0].get("avg_score") or 0.0, 1)
-            total_contacts = agg_result[0].get("total_contacts") or 0
+            ]
+            agg_result = list(mongo_manager.leads_collection.aggregate(pipeline))
+            if agg_result:
+                avg_score = round(agg_result[0].get("avg_score") or 0.0, 1)
+                total_contacts = agg_result[0].get("total_contacts") or 0
     except Exception as e:
         logger.warning(f"Stats check error: {e}")
 
@@ -430,6 +431,15 @@ def get_leads(
             if "$and" not in query:
                 query["$and"] = []
             query["$and"].append(search_cond)
+
+        if mongo_manager.leads_collection is None:
+            return {
+                "total": 0,
+                "page": page,
+                "limit": limit,
+                "total_pages": 0,
+                "leads": [],
+            }
 
         total_matching = mongo_manager.leads_collection.count_documents(query)
         skip = (page - 1) * limit
