@@ -187,10 +187,20 @@
                 <div class="form-group flex-1">
                   <label for="company-size">Target Company Size</label>
                   <select id="company-size" class="custom-select">
-                    <option value="small" selected>🌱 Small / Startup (&lt; 200) [Default]</option>
-                    <option value="medium">🏢 Medium (201 - 1,000)</option>
-                    <option value="large">🏛️ Large / Enterprise (1,000+)</option>
+                    <option value="small" selected>🌱 Small / Startup (1-50 employees) [Default]</option>
+                    <option value="medium">🏢 Medium (51 - 500)</option>
+                    <option value="large">🏛️ Large / Enterprise (500+)</option>
                     <option value="all">🌐 All Company Sizes</option>
+                  </select>
+                </div>
+
+                <div class="form-group flex-1">
+                  <label for="job-type">Job / Engagement Type</label>
+                  <select id="job-type" class="custom-select">
+                    <option value="all" selected>🌐 All Types</option>
+                    <option value="contract">🤝 Freelance / Contract (C2C, Gig)</option>
+                    <option value="fulltime">💼 Full-time Permanent</option>
+                    <option value="parttime">⏱️ Part-time</option>
                   </select>
                 </div>
 
@@ -280,9 +290,16 @@
             <div class="filters-group">
               <select id="filter-company-size" class="custom-select filter-select">
                 <option value="all">All Sizes</option>
-                <option value="small" selected>🌱 Small (&lt; 200)</option>
-                <option value="medium">🏢 Medium (201-1k)</option>
-                <option value="large">🏛️ Large (1k+)</option>
+                <option value="small" selected>🌱 Small (1-50)</option>
+                <option value="medium">🏢 Medium (51-500)</option>
+                <option value="large">🏛️ Large (500+)</option>
+              </select>
+
+              <select id="filter-job-type" class="custom-select filter-select">
+                <option value="all">All Job Types</option>
+                <option value="contract">🤝 Freelance / Contract</option>
+                <option value="fulltime">💼 Full-time</option>
+                <option value="parttime">⏱️ Part-time</option>
               </select>
 
               <select id="filter-site" class="custom-select filter-select">

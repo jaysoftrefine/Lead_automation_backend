@@ -45,6 +45,7 @@ class JobSpyScraper(BaseScraper):
         results_wanted: int = 20,
         hours_old: Optional[int] = 72,
         sites: Optional[List[str]] = None,
+        job_type: Optional[str] = None,
         country_indeed: str = "USA",
         **kwargs
     ) -> List[RawJobPosting]:
@@ -56,21 +57,26 @@ class JobSpyScraper(BaseScraper):
 
         target_sites = sites or ["linkedin", "naukri"]
         logger.info(
-            f"Initiating JobSpy scrape for '{search_term}' | Location: '{location}' | Sites: {target_sites} | Results wanted: {results_wanted}"
+            f"Initiating JobSpy scrape for '{search_term}' | Location: '{location}' | Job Type: {job_type or 'All'} | Sites: {target_sites} | Results wanted: {results_wanted}"
         )
 
         try:
-            # Call jobspy's scrape_jobs
-            df = scrape_jobs(
-                site_name=target_sites,
-                search_term=search_term,
-                location=location or "",
-                results_wanted=results_wanted,
-                hours_old=hours_old,
-                country_indeed=country_indeed,
-                proxies=self.proxies,
+            # Build scraping kwargs
+            scrape_kwargs = {
+                "site_name": target_sites,
+                "search_term": search_term,
+                "location": location or "",
+                "results_wanted": results_wanted,
+                "hours_old": hours_old,
+                "country_indeed": country_indeed,
+                "proxies": self.proxies,
                 **kwargs
-            )
+            }
+            if job_type and job_type.lower() not in ("all", "any"):
+                scrape_kwargs["job_type"] = job_type.lower().strip()
+
+            # Call jobspy's scrape_jobs
+            df = scrape_jobs(**scrape_kwargs)
 
             if df is None or df.empty:
                 logger.warning("JobSpy returned an empty dataframe or no jobs found.")

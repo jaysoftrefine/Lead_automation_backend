@@ -165,6 +165,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const searchTerm = document.getElementById("search-term").value.trim();
     const location = document.getElementById("search-location").value.trim();
     const companySize = document.getElementById("company-size") ? document.getElementById("company-size").value : "small";
+    const jobType = document.getElementById("job-type") ? document.getElementById("job-type").value : "all";
     const limit = parseInt(document.getElementById("search-limit").value, 10);
     const minScore = parseInt(document.getElementById("min-score").value, 10);
     const provider = document.getElementById("pipeline-provider").value;
@@ -190,7 +191,7 @@ document.addEventListener("DOMContentLoaded", () => {
     progressBox.style.display = "block";
     progressFill.style.width = "5%";
     progressCountLabel.innerText = "0 / ?";
-    progressJobLabel.innerText = `Connecting to ${checkedSites.join(", ")} and scraping '${searchTerm}' (Target Size: ${companySize.toUpperCase()})...`;
+    progressJobLabel.innerText = `Connecting to ${checkedSites.join(", ")} and scraping '${searchTerm}' (Target: ${companySize.toUpperCase()} [Max 50], ${jobType.toUpperCase()})...`;
 
     try {
       const res = await fetch(`${API_BASE}/api/pipeline/run`, {
@@ -200,6 +201,7 @@ document.addEventListener("DOMContentLoaded", () => {
           search_term: searchTerm,
           location: location,
           company_size: companySize,
+          job_type: jobType,
           sites: checkedSites,
           limit: limit,
           min_score: minScore,
@@ -323,6 +325,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const search = leadSearchInput.value.trim();
     const companySize = filterCompanySize ? filterCompanySize.value : "all";
+    const filterJobType = document.getElementById("filter-job-type");
+    const jobType = filterJobType ? filterJobType.value : "all";
     const site = filterSite.value;
     const status = filterStatus.value;
     const minScore = filterMinScore.value;
@@ -330,6 +334,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const params = new URLSearchParams();
     if (search) params.append("search", search);
     if (companySize && companySize !== "all") params.append("company_size", companySize);
+    if (jobType && jobType !== "all") params.append("job_type", jobType);
     if (site && site !== "all") params.append("site", site);
     if (status && status !== "all") params.append("status", status);
     if (minScore > 0) params.append("min_score", minScore);
@@ -406,7 +411,8 @@ document.addEventListener("DOMContentLoaded", () => {
           </div>
 
           <div class="lead-meta-row">
-            <span class="lead-meta-pill" style="color: var(--accent-emerald); background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.2);"><i data-lucide="building-2" style="width:12px;height:12px;"></i> ${escapeHtml(lead.company_size || "Small (1-50)")}</span>
+            <span class="lead-meta-pill" style="color: var(--accent-emerald); background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.2);"><i data-lucide="building-2" style="width:12px;height:12px;"></i> ${escapeHtml(lead.company_size || "11-50 employees")}</span>
+            <span class="lead-meta-pill" style="color: #f59e0b; background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.2);"><i data-lucide="briefcase" style="width:12px;height:12px;"></i> ${escapeHtml(lead.job_type || "Contract")}</span>
             <span class="lead-meta-pill"><i data-lucide="globe" style="width:12px;height:12px;"></i> ${escapeHtml(lead.site.toUpperCase())}</span>
             <span class="lead-meta-pill"><i data-lucide="map-pin" style="width:12px;height:12px;"></i> ${escapeHtml(lead.location || "Remote")}</span>
             ${lead.hiring_urgency ? `<span class="lead-meta-pill text-amber"><i data-lucide="clock" style="width:12px;height:12px;"></i> ${escapeHtml(lead.hiring_urgency)} Urgency</span>` : ''}
@@ -637,6 +643,8 @@ document.addEventListener("DOMContentLoaded", () => {
   btnRefreshLeads.addEventListener("click", fetchLeads);
   leadSearchInput.addEventListener("input", debounce(fetchLeads, 400));
   if (filterCompanySize) filterCompanySize.addEventListener("change", fetchLeads);
+  const filterJobTypeEl = document.getElementById("filter-job-type");
+  if (filterJobTypeEl) filterJobTypeEl.addEventListener("change", fetchLeads);
   filterSite.addEventListener("change", fetchLeads);
   filterStatus.addEventListener("change", fetchLeads);
   filterMinScore.addEventListener("input", debounce(fetchLeads, 400));

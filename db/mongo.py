@@ -178,6 +178,37 @@ class MongoManager:
             logger.error(f"Error retrieving leads from MongoDB: {e}")
             raise DatabaseException(f"Failed to query leads: {e}") from e
 
+    def clear_database(self) -> Dict[str, int]:
+        """Clear all documents from enriched_leads and raw_jobs collections while preserving indexes."""
+        try:
+            if self._db is None:
+                self.connect()
+            leads_deleted = self.leads_collection.delete_many({}).deleted_count
+            raw_deleted = self.raw_jobs_collection.delete_many({}).deleted_count
+            
+            # Re-ensure indexes exist
+            self._ensure_indexes()
+            logger.info(f"Database '{self.db_name}' cleared: {leads_deleted} leads and {raw_deleted} raw jobs deleted.")
+            return {
+                "leads_deleted": leads_deleted,
+                "raw_jobs_deleted": raw_deleted,
+                "total_deleted": leads_deleted + raw_deleted,
+            }
+        except Exception as e:
+            logger.error(f"Error clearing database '{self.db_name}': {e}")
+            raise DatabaseException(f"Failed to clear database: {e}") from e
+
+    def drop_database(self) -> None:
+        """Drop the entire database."""
+        try:
+            if self._client is None:
+                self.connect()
+            self._client.drop_database(self.db_name)
+            logger.info(f"Database '{self.db_name}' dropped successfully.")
+        except Exception as e:
+            logger.error(f"Error dropping database '{self.db_name}': {e}")
+            raise DatabaseException(f"Failed to drop database: {e}") from e
+
     def close(self) -> None:
         """Close MongoDB connection."""
         if self._client:

@@ -31,6 +31,7 @@ class LeadState(TypedDict):
     date_posted: str
     description: str
     target_company_size: str
+    target_job_type: str
 
     # Chain of Thought (COT) Reasoning
     cot_reasoning: str
@@ -113,14 +114,16 @@ Conduct an in-depth Chain-of-Thought (COT) analysis of the following job posting
 - Location: {state['location']}
 - Job Type: {state['job_type']}
 - Source: {state['site']}
-- Target Company Size Focus: {state.get('target_company_size', 'small')}
+- Target Company Size Focus: {state.get('target_company_size', 'small')} (MAX 50 employees for small)
+- Target Job Type Focus: {state.get('target_job_type', 'all')}
 - Description: {state['description'][:2000]}
 
 ### REQUIRED CHAIN-OF-THOUGHT (COT) BREAKDOWN:
-1. Entity & Company Size Assessment: Is this a direct employer? What is the estimated company size (e.g. startup <50, small 51-200, medium 201-1000, enterprise 1000+)? Does it match the target size focus ({state.get('target_company_size', 'small')})?
-2. Technical Stack: What core technologies, tools, and platforms are needed?
-3. Hiring Signal: What indicates urgency, growth, or contract opportunities?
-4. Information Gaps: What missing details must be researched (e.g. company domain, company headcount, recruiter names on LinkedIn, engineering leadership, contact email/phone)?
+1. Entity & Company Size Assessment: Is this a direct employer? What is the estimated company size (e.g. startup/small 1-10 or 11-50 [max 50], medium 51-500, enterprise 500+)? Does it match the target size focus ({state.get('target_company_size', 'small')})?
+2. Job Type / Freelance Suitability: Is this a genuine contract/freelance role or standard full-time corporate position? Does it align with target job type ({state.get('target_job_type', 'all')})?
+3. Technical Stack: What core technologies, tools, and platforms are needed?
+4. Hiring Signal: What indicates urgency, growth, or contract opportunities?
+5. Information Gaps: What missing details must be researched (e.g. company domain, company headcount, recruiter names on LinkedIn, engineering leadership, contact email/phone)?
 
 Output your structured reasoning clearly."""
 
@@ -242,7 +245,8 @@ Location: {state['location']}
 Job Type: {state['job_type']}
 Salary: {state['salary_info']}
 Job URL: {state['job_url']}
-Target Company Size Focus: {state.get('target_company_size', 'small')}
+Target Company Size Focus: {state.get('target_company_size', 'small')} (MAX 50 employees for small: 1-10, 11-50)
+Target Job Type Focus: {state.get('target_job_type', 'all')}
 Description: {state['description'][:2500]}
 
 --- CHAIN OF THOUGHT (COT) ANALYSIS ---
@@ -255,7 +259,7 @@ Description: {state['description'][:2500]}
 Synthesize all discoveries into the exact structured schema.
 Extract:
 1. Official company domain (e.g. stripe.com)
-2. Accurate company size classification (e.g. '1-10 employees', '11-50 employees', '51-200 employees', '201-1000 employees', '1000+ employees')
+2. Accurate company size classification (e.g. '1-10 employees', '11-50 employees' for small; '51-200 employees', '201-500 employees' for medium; '500+ employees' for enterprise)
 3. Verified recruiter / executive / hiring contacts with role, email, phone, and confidence scores (0-100)
 4. Key technical stack & skills
 5. Relevance score (0-100) and hiring urgency
@@ -384,11 +388,11 @@ Respond ONLY with a valid JSON object matching this schema:
 
         return verified_contacts
 
-    def enrich_job(self, job: RawJobPosting, target_company_size: str = "small") -> EnrichedLead:
+    def enrich_job(self, job: RawJobPosting, target_company_size: str = "small", target_job_type: str = "all") -> EnrichedLead:
         """
         Executes the full LangGraph COT & COA research workflow for a given job posting.
         """
-        logger.info(f"🚀 [LangGraph Agent] Initiating COT & COA enrichment: '{job.title}' at '{job.company}' (Target Size: {target_company_size})")
+        logger.info(f"🚀 [LangGraph Agent] Initiating COT & COA enrichment: '{job.title}' at '{job.company}' (Target Size: {target_company_size}, Job Type: {target_job_type})")
         
         initial_state: LeadState = {
             "title": job.title,
@@ -396,11 +400,12 @@ Respond ONLY with a valid JSON object matching this schema:
             "location": job.location or "Remote",
             "site": job.site,
             "job_url": job.job_url,
-            "job_type": job.job_type or "Full-time",
+            "job_type": job.job_type or ("Contract" if "contract" in target_job_type.lower() or "freelance" in str(job.title).lower() else "Full-time"),
             "salary_info": f"{job.salary_min or ''} - {job.salary_max or ''} {job.salary_currency or ''}".strip(),
             "date_posted": str(job.date_posted or "Recently"),
             "description": job.description or "No description provided",
             "target_company_size": target_company_size,
+            "target_job_type": target_job_type,
             "cot_reasoning": "",
             "extracted_tech_stack": [],
             "is_direct_employer": True,

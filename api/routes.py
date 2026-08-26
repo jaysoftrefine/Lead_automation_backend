@@ -98,7 +98,8 @@ class RunPipelineRequest(BaseModel):
     search_term: str = Field(..., example="Python Backend Developer")
     location: str = Field("Remote", example="Remote")
     sites: List[str] = Field(default_factory=lambda: ["linkedin", "naukri"])
-    company_size: str = Field("small", example="small", description="Target company size: 'small', 'medium', 'large', or 'all'")
+    company_size: str = Field("small", example="small", description="Target company size: 'small' (1-50 employees), 'medium' (51-500), 'large' (500+), or 'all'")
+    job_type: Optional[str] = Field("all", example="contract", description="Target job type: 'all', 'contract' (freelance/C2C), 'fulltime', 'parttime', 'internship'")
     limit: int = Field(10, ge=1, le=100)
     provider: Optional[str] = Field(None, example="gemini")
     model: Optional[str] = Field(None, example="gemini-2.5-flash")
@@ -125,7 +126,12 @@ class UpdateLeadStatusRequest(BaseModel):
 def _execute_pipeline_task(req: RunPipelineRequest):
     pipeline_state.reset()
     target_size = req.company_size or "small"
-    pipeline_state.add_log(f"Starting pipeline for '{req.search_term}' in '{req.location}' (Size Target: {target_size.upper()})", "info")
+    detected_job_type, effective_search_term = detect_job_type_filter(req.search_term, explicit_job_type=req.job_type)
+    
+    pipeline_state.add_log(
+        f"Starting pipeline for '{req.search_term}' in '{req.location}' (Size Target: {target_size.upper()} [Max 50], Job Type: {str(detected_job_type or 'all').upper()})",
+        "info"
+    )
     pipeline_state.add_log(f"Target platforms: {', '.join(req.sites)} (Limit: {req.limit})", "info")
 
     try:
@@ -146,15 +152,16 @@ def _execute_pipeline_task(req: RunPipelineRequest):
         )
 
         pipeline_state.status = "scraping"
-        pipeline_state.add_log(f"📡 [1/2] Scraping job postings from {', '.join(req.sites)} (Location: '{req.location}')...", "info")
+        pipeline_state.add_log(f"📡 [1/2] Scraping job postings from {', '.join(req.sites)} (Job Type: {str(detected_job_type or 'all').upper()}, Location: '{req.location}')...", "info")
 
         # Scrape jobs
         raw_postings = orchestrator.scraper.scrape(
-            search_term=req.search_term,
+            search_term=effective_search_term,
             location=req.location,
             results_wanted=req.limit,
             hours_old=req.hours_old,
             sites=req.sites,
+            job_type=detected_job_type,
         )
 
         unique_comps = sorted(list({p.company.strip() for p in raw_postings if p.company and p.company.strip()}))
@@ -163,6 +170,7 @@ def _execute_pipeline_task(req: RunPipelineRequest):
             location=req.location,
             sites=req.sites,
             target_company_size=target_size,
+            target_job_type=detected_job_type or "all",
             total_scraped=len(raw_postings),
             unique_companies_count=len(unique_comps),
             unique_companies=unique_comps,
@@ -184,7 +192,7 @@ def _execute_pipeline_task(req: RunPipelineRequest):
             return
 
         pipeline_state.status = "enriching"
-        pipeline_state.add_log(f"🧠 [2/2] Starting autonomous AI research on {len(raw_postings)} postings (Filtering for {target_size.upper()} companies)...", "info")
+        pipeline_state.add_log(f"🧠 [2/2] Starting autonomous AI research on {len(raw_postings)} postings (Filtering for {target_size.upper()} [Max 50] companies & {str(detected_job_type or 'all').upper()} jobs)...", "info")
 
         for idx, job in enumerate(raw_postings, start=1):
             if pipeline_state._stop_requested:
@@ -216,7 +224,11 @@ def _execute_pipeline_task(req: RunPipelineRequest):
             metrics.processed_by_agent += 1
             try:
                 pipeline_state.add_log(f"🤖 Agent researching '{job.company}' (Domain, Company Size & Contacts)...", "info")
-                enriched_lead = agent.enrich_job(job, target_company_size=target_size)
+                enriched_lead = agent.enrich_job(
+                    job,
+                    target_company_size=target_size,
+                    target_job_type=detected_job_type or "all",
+                )
 
                 if not enriched_lead.is_valid_lead:
                     pipeline_state.add_log(
@@ -235,10 +247,10 @@ def _execute_pipeline_task(req: RunPipelineRequest):
                     metrics.rejected_by_llm += 1
                     continue
 
-                # Company Size Validation
+                # Strict Company Size Validation (Max 50 for small)
                 if target_size != "all" and not is_matching_company_size(enriched_lead.company_size, target_filter=target_size):
                     pipeline_state.add_log(
-                        f"❌ REJECTED (Size Mismatch): '{job.company}' size is '{enriched_lead.company_size or 'Unknown'}' (Target was '{target_size}')",
+                        f"❌ REJECTED (Size Mismatch): '{job.company}' size is '{enriched_lead.company_size or 'Unknown'}' (Target was '{target_size}' max 50)",
                         "warning"
                     )
                     metrics.rejected_by_size += 1
@@ -252,7 +264,7 @@ def _execute_pipeline_task(req: RunPipelineRequest):
 
                 contact_preview = ", ".join([f"{c.name or 'Recruiter'} ({c.email or 'Domain'})" for c in enriched_lead.contacts[:2]])
                 pipeline_state.add_log(
-                    f"✅ QUALIFIED LEAD SAVED: '{job.company}' ({enriched_lead.company_size or 'Small'}) | Score: {enriched_lead.relevance_score}/100 | Contacts ({contacts_found}): {contact_preview or 'Company Domain'}",
+                    f"✅ QUALIFIED LEAD SAVED: '{job.company}' ({enriched_lead.company_size or 'Small'}) [{enriched_lead.job_type or 'Contract'}] | Score: {enriched_lead.relevance_score}/100 | Contacts ({contacts_found}): {contact_preview or 'Company Domain'}",
                     "success"
                 )
 
@@ -265,7 +277,7 @@ def _execute_pipeline_task(req: RunPipelineRequest):
         # Log final summary
         pipeline_state.add_log("=" * 60, "info")
         pipeline_state.add_log(
-            f"📊 SUMMARY: Scraped: {metrics.total_scraped} | Unique Companies: {metrics.unique_companies_count} | Target Size: {target_size.upper()} | Processed: {metrics.processed_by_agent} | Qualified Leads Saved: {metrics.saved_to_db} | Contacts Found: {metrics.total_contacts_discovered}",
+            f"📊 SUMMARY: Scraped: {metrics.total_scraped} | Unique Companies: {metrics.unique_companies_count} | Target Size: {target_size.upper()} (Max 50) | Processed: {metrics.processed_by_agent} | Qualified Leads Saved: {metrics.saved_to_db} | Contacts Found: {metrics.total_contacts_discovered}",
             "success"
         )
         pipeline_state.finish(metrics=metrics)
@@ -330,6 +342,7 @@ def get_leads(
     site: Optional[str] = Query(None, description="Platform filter (linkedin, naukri, etc.)"),
     status: Optional[str] = Query(None, description="Lead status filter"),
     company_size: Optional[str] = Query(None, description="Company size filter ('small', 'medium', 'large', 'all')"),
+    job_type: Optional[str] = Query(None, description="Job type filter ('contract', 'fulltime', 'parttime', 'all')"),
     min_score: int = Query(0, ge=0, le=100, description="Minimum relevance score"),
     has_contacts: Optional[bool] = Query(None, description="Filter for leads with found contacts"),
     limit: int = Query(50, ge=1, le=200),
@@ -352,25 +365,32 @@ def get_leads(
         if has_contacts is True:
             query["contacts.0"] = {"$exists": True}
 
-        # Company Size Filter
+        # Strict Company Size Filter (Small = MAX 50 employees: 1-10, 11-50)
         if company_size and company_size.lower() != "all":
             c_size = company_size.lower().strip()
             if c_size == "small":
                 size_cond = {
-                    "$or": [
-                        {"company_size": {"$regex": "1-10|11-50|51-200|1-50|1-20|startup|small|boutique|seed", "$options": "i"}},
-                        {"company_size": None},
-                        {"company_size": "Unspecified"},
-                        {"company_size": "Unknown"},
+                    "$and": [
+                        {
+                            "$or": [
+                                {"company_size": {"$regex": r"\b(1-10|11-50|1-50|1-20|startup|seed|micro|boutique)\b", "$options": "i"}},
+                                {"company_size": None},
+                                {"company_size": "Unspecified"},
+                                {"company_size": "Unknown"},
+                            ]
+                        },
+                        {
+                            "company_size": {"$not": {"$regex": r"\b(51-200|201-500|501-1000|500\+|1000\+|enterprise)\b", "$options": "i"}}
+                        }
                     ]
                 }
             elif c_size == "medium":
                 size_cond = {
-                    "company_size": {"$regex": "201-500|501-1000|201-1000|200-500|medium|mid", "$options": "i"}
+                    "company_size": {"$regex": r"\b(51-200|201-500|501-1000|201-1000|200-500|medium|mid)\b", "$options": "i"}
                 }
             elif c_size == "large":
                 size_cond = {
-                    "company_size": {"$regex": "1000\\+|5000\\+|10000\\+|enterprise|corporation|corporate|fortune", "$options": "i"}
+                    "company_size": {"$regex": r"\b(500\+|1000\+|5000\+|10000\+|enterprise|corporation|corporate|fortune)\b", "$options": "i"}
                 }
             else:
                 size_cond = None
@@ -379,6 +399,22 @@ def get_leads(
                 if "$and" not in query:
                     query["$and"] = []
                 query["$and"].append(size_cond)
+
+        # Job Type Filter
+        if job_type and job_type.lower() != "all":
+            jt = job_type.lower().strip()
+            if jt in ("contract", "freelance"):
+                jt_cond = {
+                    "$or": [
+                        {"job_type": {"$regex": "contract|freelance|c2c|corp|gig|part-time|outside ir35", "$options": "i"}},
+                        {"title": {"$regex": "contract|freelance|c2c|gig|outside ir35", "$options": "i"}}
+                    ]
+                }
+            else:
+                jt_cond = {"job_type": {"$regex": jt, "$options": "i"}}
+            if "$and" not in query:
+                query["$and"] = []
+            query["$and"].append(jt_cond)
 
         if search:
             regex_search = {"$regex": search, "$options": "i"}
@@ -576,6 +612,7 @@ def export_leads_csv(
     site: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
     company_size: Optional[str] = Query(None),
+    job_type: Optional[str] = Query(None),
 ):
     """Export enriched leads to a downloadable CSV file."""
     try:
@@ -591,16 +628,43 @@ def export_leads_csv(
         if company_size and company_size.lower() != "all":
             c_size = company_size.lower().strip()
             if c_size == "small":
-                query["$or"] = [
-                    {"company_size": {"$regex": "1-10|11-50|51-200|1-50|1-20|startup|small|boutique|seed", "$options": "i"}},
-                    {"company_size": None},
-                    {"company_size": "Unspecified"},
-                    {"company_size": "Unknown"},
-                ]
+                size_cond = {
+                    "$and": [
+                        {
+                            "$or": [
+                                {"company_size": {"$regex": r"\b(1-10|11-50|1-50|1-20|startup|seed|micro|boutique)\b", "$options": "i"}},
+                                {"company_size": None},
+                                {"company_size": "Unspecified"},
+                                {"company_size": "Unknown"},
+                            ]
+                        },
+                        {
+                            "company_size": {"$not": {"$regex": r"\b(51-200|201-500|501-1000|500\+|1000\+|enterprise)\b", "$options": "i"}}
+                        }
+                    ]
+                }
+                if "$and" not in query:
+                    query["$and"] = []
+                query["$and"].append(size_cond)
             elif c_size == "medium":
-                query["company_size"] = {"$regex": "201-500|501-1000|201-1000|200-500|medium|mid", "$options": "i"}
+                query["company_size"] = {"$regex": r"\b(51-200|201-500|501-1000|201-1000|200-500|medium|mid)\b", "$options": "i"}
             elif c_size == "large":
-                query["company_size"] = {"$regex": "1000\\+|5000\\+|10000\\+|enterprise|corporation|corporate|fortune", "$options": "i"}
+                query["company_size"] = {"$regex": r"\b(500\+|1000\+|5000\+|10000\+|enterprise|corporation|corporate|fortune)\b", "$options": "i"}
+
+        if job_type and job_type.lower() != "all":
+            jt = job_type.lower().strip()
+            if jt in ("contract", "freelance"):
+                jt_cond = {
+                    "$or": [
+                        {"job_type": {"$regex": "contract|freelance|c2c|corp|gig|part-time|outside ir35", "$options": "i"}},
+                        {"title": {"$regex": "contract|freelance|c2c|gig|outside ir35", "$options": "i"}}
+                    ]
+                }
+            else:
+                jt_cond = {"job_type": {"$regex": jt, "$options": "i"}}
+            if "$and" not in query:
+                query["$and"] = []
+            query["$and"].append(jt_cond)
 
         leads = list(mongo_manager.leads_collection.find(query).sort("created_at", -1))
 
@@ -612,6 +676,7 @@ def export_leads_csv(
             "Company",
             "Company Size",
             "Job Title",
+            "Job Type",
             "Domain",
             "Location",
             "Platform",
@@ -633,8 +698,9 @@ def export_leads_csv(
             primary = contacts[0] if contacts else {}
             writer.writerow([
                 lead.get("company", ""),
-                lead.get("company_size", "Small"),
+                lead.get("company_size", "11-50 employees"),
                 lead.get("title", ""),
+                lead.get("job_type", "Contract"),
                 lead.get("company_domain", ""),
                 lead.get("location", ""),
                 lead.get("site", ""),
