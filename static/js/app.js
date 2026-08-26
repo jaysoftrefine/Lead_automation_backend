@@ -51,9 +51,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Leads Tab Elements
   const leadSearchInput = document.getElementById("lead-search-input");
+  const filterCompanySize = document.getElementById("filter-company-size");
   const filterSite = document.getElementById("filter-site");
   const filterStatus = document.getElementById("filter-status");
   const filterMinScore = document.getElementById("filter-min-score");
+  const btnExportCsv = document.getElementById("btn-export-csv");
   const btnRefreshLeads = document.getElementById("btn-refresh-leads");
   const leadsListContainer = document.getElementById("leads-list-container");
   const leadsLoadingSpinner = document.getElementById("leads-loading-spinner");
@@ -162,6 +164,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const searchTerm = document.getElementById("search-term").value.trim();
     const location = document.getElementById("search-location").value.trim();
+    const companySize = document.getElementById("company-size") ? document.getElementById("company-size").value : "small";
     const limit = parseInt(document.getElementById("search-limit").value, 10);
     const minScore = parseInt(document.getElementById("min-score").value, 10);
     const provider = document.getElementById("pipeline-provider").value;
@@ -187,7 +190,7 @@ document.addEventListener("DOMContentLoaded", () => {
     progressBox.style.display = "block";
     progressFill.style.width = "5%";
     progressCountLabel.innerText = "0 / ?";
-    progressJobLabel.innerText = `Connecting to ${checkedSites.join(", ")} and scraping '${searchTerm}'...`;
+    progressJobLabel.innerText = `Connecting to ${checkedSites.join(", ")} and scraping '${searchTerm}' (Target Size: ${companySize.toUpperCase()})...`;
 
     try {
       const res = await fetch(`${API_BASE}/api/pipeline/run`, {
@@ -196,6 +199,7 @@ document.addEventListener("DOMContentLoaded", () => {
         body: JSON.stringify({
           search_term: searchTerm,
           location: location,
+          company_size: companySize,
           sites: checkedSites,
           limit: limit,
           min_score: minScore,
@@ -318,15 +322,22 @@ document.addEventListener("DOMContentLoaded", () => {
     leadsListContainer.innerHTML = "";
 
     const search = leadSearchInput.value.trim();
+    const companySize = filterCompanySize ? filterCompanySize.value : "all";
     const site = filterSite.value;
     const status = filterStatus.value;
     const minScore = filterMinScore.value;
 
     const params = new URLSearchParams();
     if (search) params.append("search", search);
+    if (companySize && companySize !== "all") params.append("company_size", companySize);
     if (site && site !== "all") params.append("site", site);
     if (status && status !== "all") params.append("status", status);
     if (minScore > 0) params.append("min_score", minScore);
+
+    // Update export CSV link
+    if (btnExportCsv) {
+      btnExportCsv.href = `${API_BASE}/api/export/csv?${params.toString()}`;
+    }
 
     try {
       const res = await fetch(`${API_BASE}/api/leads?${params.toString()}`);
@@ -395,6 +406,7 @@ document.addEventListener("DOMContentLoaded", () => {
           </div>
 
           <div class="lead-meta-row">
+            <span class="lead-meta-pill" style="color: var(--accent-emerald); background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.2);"><i data-lucide="building-2" style="width:12px;height:12px;"></i> ${escapeHtml(lead.company_size || "Small (1-50)")}</span>
             <span class="lead-meta-pill"><i data-lucide="globe" style="width:12px;height:12px;"></i> ${escapeHtml(lead.site.toUpperCase())}</span>
             <span class="lead-meta-pill"><i data-lucide="map-pin" style="width:12px;height:12px;"></i> ${escapeHtml(lead.location || "Remote")}</span>
             ${lead.hiring_urgency ? `<span class="lead-meta-pill text-amber"><i data-lucide="clock" style="width:12px;height:12px;"></i> ${escapeHtml(lead.hiring_urgency)} Urgency</span>` : ''}
@@ -453,6 +465,13 @@ document.addEventListener("DOMContentLoaded", () => {
     const queriesList = (lead.search_queries_used || []).map(q => `<li style="font-size:0.8rem; color:var(--text-secondary);">${escapeHtml(q)}</li>`).join("");
 
     modalBodyContent.innerHTML = `
+      <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 0.5rem;">
+        <span class="lead-meta-pill" style="color: var(--accent-emerald); background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.2);"><i data-lucide="building-2" style="width:12px;height:12px;"></i> Size: ${escapeHtml(lead.company_size || 'Small')}</span>
+        <span class="lead-meta-pill"><i data-lucide="map-pin" style="width:12px;height:12px;"></i> ${escapeHtml(lead.location || 'Remote')}</span>
+        <span class="lead-meta-pill"><i data-lucide="globe" style="width:12px;height:12px;"></i> ${escapeHtml(lead.site.toUpperCase())}</span>
+        ${lead.hiring_urgency ? `<span class="lead-meta-pill text-amber"><i data-lucide="clock" style="width:12px;height:12px;"></i> ${escapeHtml(lead.hiring_urgency)} Urgency</span>` : ''}
+      </div>
+
       <div>
         <h4 style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.4rem;">OPPORTUNITY SUMMARY</h4>
         <p style="font-size: 0.9rem; color: #e2e8f0;">${escapeHtml(lead.lead_summary || lead.company_summary || 'No summary available.')}</p>
@@ -617,6 +636,7 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   btnRefreshLeads.addEventListener("click", fetchLeads);
   leadSearchInput.addEventListener("input", debounce(fetchLeads, 400));
+  if (filterCompanySize) filterCompanySize.addEventListener("change", fetchLeads);
   filterSite.addEventListener("change", fetchLeads);
   filterStatus.addEventListener("change", fetchLeads);
   filterMinScore.addEventListener("input", debounce(fetchLeads, 400));

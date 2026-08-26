@@ -30,6 +30,7 @@ class LeadState(TypedDict):
     salary_info: str
     date_posted: str
     description: str
+    target_company_size: str
 
     # Chain of Thought (COT) Reasoning
     cot_reasoning: str
@@ -112,13 +113,14 @@ Conduct an in-depth Chain-of-Thought (COT) analysis of the following job posting
 - Location: {state['location']}
 - Job Type: {state['job_type']}
 - Source: {state['site']}
+- Target Company Size Focus: {state.get('target_company_size', 'small')}
 - Description: {state['description'][:2000]}
 
 ### REQUIRED CHAIN-OF-THOUGHT (COT) BREAKDOWN:
-1. Entity Assessment: Is this a direct employer or third-party recruitment firm?
+1. Entity & Company Size Assessment: Is this a direct employer? What is the estimated company size (e.g. startup <50, small 51-200, medium 201-1000, enterprise 1000+)? Does it match the target size focus ({state.get('target_company_size', 'small')})?
 2. Technical Stack: What core technologies, tools, and platforms are needed?
 3. Hiring Signal: What indicates urgency, growth, or contract opportunities?
-4. Information Gaps: What missing details must be researched (e.g. company domain, recruiter names on LinkedIn, engineering leadership, contact email/phone)?
+4. Information Gaps: What missing details must be researched (e.g. company domain, company headcount, recruiter names on LinkedIn, engineering leadership, contact email/phone)?
 
 Output your structured reasoning clearly."""
 
@@ -145,13 +147,14 @@ Output your structured reasoning clearly."""
         planned_queries = []
         
         if iteration == 1:
-            # Phase 1: Core Domain, Location Headquarters & Recruiter LinkedIn
+            # Phase 1: Core Domain, Location Headquarters, Company Size & Recruiter LinkedIn
             q1 = f'"{company}" official website company domain headquarters'
-            q2 = f'"{company}" "{location}" "technical recruiter" OR "talent acquisition" LinkedIn'
-            q3 = f'"{company}" "CTO" OR "Engineering Manager" OR "Head of Engineering" LinkedIn'
-            q4 = f'"{company}" careers contact email OR jobs email'
+            q2 = f'"{company}" employees OR headcount OR "company size" LinkedIn'
+            q3 = f'"{company}" "{location}" "technical recruiter" OR "talent acquisition" LinkedIn'
+            q4 = f'"{company}" "CTO" OR "Engineering Manager" OR "Head of Engineering" LinkedIn'
+            q5 = f'"{company}" careers contact email OR jobs email'
             
-            for q in [q1, q2, q3, q4]:
+            for q in [q1, q2, q3, q4, q5]:
                 if q not in executed:
                     planned_queries.append(q)
         else:
@@ -239,6 +242,7 @@ Location: {state['location']}
 Job Type: {state['job_type']}
 Salary: {state['salary_info']}
 Job URL: {state['job_url']}
+Target Company Size Focus: {state.get('target_company_size', 'small')}
 Description: {state['description'][:2500]}
 
 --- CHAIN OF THOUGHT (COT) ANALYSIS ---
@@ -251,10 +255,11 @@ Description: {state['description'][:2500]}
 Synthesize all discoveries into the exact structured schema.
 Extract:
 1. Official company domain (e.g. stripe.com)
-2. Verified recruiter / executive / hiring contacts with role, email, phone, and confidence scores (0-100)
-3. Key technical stack & skills
-4. Relevance score (0-100) and hiring urgency
-5. Comprehensive step-by-step thinking process detailing the evidence found."""
+2. Accurate company size classification (e.g. '1-10 employees', '11-50 employees', '51-200 employees', '201-1000 employees', '1000+ employees')
+3. Verified recruiter / executive / hiring contacts with role, email, phone, and confidence scores (0-100)
+4. Key technical stack & skills
+5. Relevance score (0-100) and hiring urgency
+6. Comprehensive step-by-step thinking process detailing the evidence found."""
 
         # Multi-Tier Robust Structured Extraction
         structured_lead = self._robust_structured_extraction(synthesis_prompt, state)
@@ -379,11 +384,11 @@ Respond ONLY with a valid JSON object matching this schema:
 
         return verified_contacts
 
-    def enrich_job(self, job: RawJobPosting) -> EnrichedLead:
+    def enrich_job(self, job: RawJobPosting, target_company_size: str = "small") -> EnrichedLead:
         """
         Executes the full LangGraph COT & COA research workflow for a given job posting.
         """
-        logger.info(f"🚀 [LangGraph Agent] Initiating COT & COA enrichment: '{job.title}' at '{job.company}'")
+        logger.info(f"🚀 [LangGraph Agent] Initiating COT & COA enrichment: '{job.title}' at '{job.company}' (Target Size: {target_company_size})")
         
         initial_state: LeadState = {
             "title": job.title,
@@ -395,6 +400,7 @@ Respond ONLY with a valid JSON object matching this schema:
             "salary_info": f"{job.salary_min or ''} - {job.salary_max or ''} {job.salary_currency or ''}".strip(),
             "date_posted": str(job.date_posted or "Recently"),
             "description": job.description or "No description provided",
+            "target_company_size": target_company_size,
             "cot_reasoning": "",
             "extracted_tech_stack": [],
             "is_direct_employer": True,

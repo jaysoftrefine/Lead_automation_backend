@@ -27,12 +27,13 @@ def cli():
 @click.option("--search", "-s", required=True, help="Job title or search keyword (e.g. 'Python Backend Developer')")
 @click.option("--location", "-l", default="Remote", help="Job location or 'Remote'")
 @click.option("--sites", default="linkedin,naukri", help="Comma-separated sites (e.g. 'linkedin,naukri,indeed')")
+@click.option("--company-size", "-c", default="small", type=click.Choice(["small", "medium", "large", "all"], case_sensitive=False), help="Company size filter: 'small' (default), 'medium', 'large', 'all'")
 @click.option("--limit", "-n", default=10, type=int, help="Maximum jobs to scrape")
 @click.option("--provider", "-p", default=None, help="LLM Provider: 'gemini' or 'nvidia'")
 @click.option("--model", "-m", default=None, help="Specific model name to use")
 @click.option("--min-score", default=30, type=int, help="Minimum lead relevance score (0-100)")
 @click.option("--hours-old", default=72, type=int, help="Scrape jobs posted within last N hours")
-def run_pipeline(search: str, location: str, sites: str, limit: int, provider: str, model: str, min_score: int, hours_old: int):
+def run_pipeline(search: str, location: str, sites: str, company_size: str, limit: int, provider: str, model: str, min_score: int, hours_old: int):
     """Run the complete scraping -> research agent -> MongoDB pipeline."""
     target_sites = [s.strip() for s in sites.split(",") if s.strip()]
     
@@ -40,6 +41,7 @@ def run_pipeline(search: str, location: str, sites: str, limit: int, provider: s
         f"[bold cyan]Lead Generation Pipeline[/bold cyan]\n"
         f"[green]Search:[/green] {search}\n"
         f"[green]Location:[/green] {location}\n"
+        f"[green]Target Company Size:[/green] [bold yellow]{company_size.upper()}[/bold yellow]\n"
         f"[green]Sites:[/green] {', '.join(target_sites)}\n"
         f"[green]LLM Provider:[/green] {provider or settings.default_llm_provider}\n"
         f"[green]Limit:[/green] {limit}",
@@ -57,6 +59,7 @@ def run_pipeline(search: str, location: str, sites: str, limit: int, provider: s
         search_term=search,
         location=location,
         sites=target_sites,
+        company_size=company_size,
         results_limit=limit,
         hours_old=hours_old,
     )
@@ -69,10 +72,11 @@ def run_pipeline(search: str, location: str, sites: str, limit: int, provider: s
     table.add_row("Execution Time", f"{metrics.duration_seconds}s")
     table.add_row("Total Job Postings Scraped", str(metrics.total_scraped))
     table.add_row("Unique Companies Discovered", str(metrics.unique_companies_count))
+    table.add_row("Target Company Size", metrics.target_company_size.upper())
     table.add_row("Already in DB (Skipped)", str(metrics.already_existing))
     table.add_row("Processed by AI Agent", str(metrics.processed_by_agent))
     table.add_row("Qualified Leads Saved", f"{metrics.saved_to_db} ({(metrics.saved_to_db/max(1, metrics.processed_by_agent)*100):.1f}% yield)")
-    table.add_row("Rejected / Non-Qualified", str(metrics.rejected_by_llm))
+    table.add_row("Rejected / Non-Qualified", f"{metrics.rejected_by_llm} (Size Mismatch: {metrics.rejected_by_size})")
     table.add_row("Decision-Maker Contacts Found", str(metrics.total_contacts_discovered))
 
     console.print(table)
@@ -100,11 +104,24 @@ def test_db():
 @cli.command("list-leads")
 @click.option("--limit", "-n", default=10, type=int, help="Number of leads to list")
 @click.option("--min-score", default=0, type=int, help="Filter by minimum relevance score")
-def list_leads(limit: int, min_score: int):
+@click.option("--company-size", "-c", default=None, help="Filter by company size ('small', 'medium', 'large')")
+def list_leads(limit: int, min_score: int, company_size: str):
     """List enriched leads saved in MongoDB."""
     try:
         mongo_manager.connect()
         query = {"relevance_score": {"$gte": min_score}}
+        if company_size and company_size.lower() != "all":
+            if company_size.lower() == "small":
+                query["$or"] = [
+                    {"company_size": {"$regex": "1-10|11-50|51-200|1-50|1-20|startup|small|boutique|seed", "$options": "i"}},
+                    {"company_size": None},
+                    {"company_size": "Unspecified"},
+                ]
+            elif company_size.lower() == "medium":
+                query["company_size"] = {"$regex": "201-500|501-1000|201-1000|200-500|medium|mid", "$options": "i"}
+            elif company_size.lower() == "large":
+                query["company_size"] = {"$regex": "1000\\+|5000\\+|10000\\+|enterprise|corporation|corporate|fortune", "$options": "i"}
+
         leads = mongo_manager.get_leads(filter_query=query, limit=limit)
 
         if not leads:
@@ -113,9 +130,10 @@ def list_leads(limit: int, min_score: int):
 
         table = Table(title=f"Enriched Leads in MongoDB (Top {len(leads)})", border_style="blue")
         table.add_column("Company", style="bold white")
+        table.add_column("Size", style="magenta")
         table.add_column("Title", style="cyan")
         table.add_column("Score", justify="right", style="green")
-        table.add_column("Contacts", style="magenta")
+        table.add_column("Contacts", style="cyan")
         table.add_column("Domain", style="yellow")
         table.add_column("Site", style="dim")
 
@@ -127,9 +145,10 @@ def list_leads(limit: int, min_score: int):
             
             table.add_row(
                 lead.get("company", "N/A"),
-                lead.get("title", "N/A")[:30],
+                lead.get("company_size", "Small"),
+                lead.get("title", "N/A")[:25],
                 f"{lead.get('relevance_score', 0)}/100",
-                contacts_summary[:45],
+                contacts_summary[:40],
                 lead.get("company_domain", "N/A") or "N/A",
                 lead.get("site", "N/A"),
             )

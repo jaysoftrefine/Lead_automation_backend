@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 
 from config.settings import settings
 from core.logging import logger
+from core.company_filter import is_matching_company_size, classify_company_size
 from db.mongo import mongo_manager
 from db.models import RawJobPosting, EnrichedLead
 from enrichment.agent import LeadEnrichmentAgent
@@ -78,6 +79,7 @@ class PipelineState:
                     "search_term": metrics.search_term,
                     "location": metrics.location,
                     "sites": metrics.sites,
+                    "target_company_size": getattr(metrics, "target_company_size", "small"),
                     "total_scraped": metrics.total_scraped,
                     "already_existing": metrics.already_existing,
                     "processed_by_agent": metrics.processed_by_agent,
@@ -96,6 +98,7 @@ class RunPipelineRequest(BaseModel):
     search_term: str = Field(..., example="Python Backend Developer")
     location: str = Field("Remote", example="Remote")
     sites: List[str] = Field(default_factory=lambda: ["linkedin", "naukri"])
+    company_size: str = Field("small", example="small", description="Target company size: 'small', 'medium', 'large', or 'all'")
     limit: int = Field(10, ge=1, le=100)
     provider: Optional[str] = Field(None, example="gemini")
     model: Optional[str] = Field(None, example="gemini-2.5-flash")
@@ -121,7 +124,8 @@ class UpdateLeadStatusRequest(BaseModel):
 # --- Worker Function ---
 def _execute_pipeline_task(req: RunPipelineRequest):
     pipeline_state.reset()
-    pipeline_state.add_log(f"Starting pipeline for '{req.search_term}' in '{req.location}'", "info")
+    target_size = req.company_size or "small"
+    pipeline_state.add_log(f"Starting pipeline for '{req.search_term}' in '{req.location}' (Size Target: {target_size.upper()})", "info")
     pipeline_state.add_log(f"Target platforms: {', '.join(req.sites)} (Limit: {req.limit})", "info")
 
     try:
@@ -158,6 +162,7 @@ def _execute_pipeline_task(req: RunPipelineRequest):
             search_term=req.search_term,
             location=req.location,
             sites=req.sites,
+            target_company_size=target_size,
             total_scraped=len(raw_postings),
             unique_companies_count=len(unique_comps),
             unique_companies=unique_comps,
@@ -179,7 +184,7 @@ def _execute_pipeline_task(req: RunPipelineRequest):
             return
 
         pipeline_state.status = "enriching"
-        pipeline_state.add_log(f"🧠 [2/2] Starting autonomous AI research on {len(raw_postings)} postings...", "info")
+        pipeline_state.add_log(f"🧠 [2/2] Starting autonomous AI research on {len(raw_postings)} postings (Filtering for {target_size.upper()} companies)...", "info")
 
         for idx, job in enumerate(raw_postings, start=1):
             if pipeline_state._stop_requested:
@@ -210,8 +215,8 @@ def _execute_pipeline_task(req: RunPipelineRequest):
 
             metrics.processed_by_agent += 1
             try:
-                pipeline_state.add_log(f"🤖 Agent researching '{job.company}' (Tavily search & contact discovery)...", "info")
-                enriched_lead = agent.enrich_job(job)
+                pipeline_state.add_log(f"🤖 Agent researching '{job.company}' (Domain, Company Size & Contacts)...", "info")
+                enriched_lead = agent.enrich_job(job, target_company_size=target_size)
 
                 if not enriched_lead.is_valid_lead:
                     pipeline_state.add_log(
@@ -230,6 +235,16 @@ def _execute_pipeline_task(req: RunPipelineRequest):
                     metrics.rejected_by_llm += 1
                     continue
 
+                # Company Size Validation
+                if target_size != "all" and not is_matching_company_size(enriched_lead.company_size, target_filter=target_size):
+                    pipeline_state.add_log(
+                        f"❌ REJECTED (Size Mismatch): '{job.company}' size is '{enriched_lead.company_size or 'Unknown'}' (Target was '{target_size}')",
+                        "warning"
+                    )
+                    metrics.rejected_by_size += 1
+                    metrics.rejected_by_llm += 1
+                    continue
+
                 mongo_manager.upsert_enriched_lead(enriched_lead)
                 metrics.saved_to_db += 1
                 contacts_found = len(enriched_lead.contacts)
@@ -237,7 +252,7 @@ def _execute_pipeline_task(req: RunPipelineRequest):
 
                 contact_preview = ", ".join([f"{c.name or 'Recruiter'} ({c.email or 'Domain'})" for c in enriched_lead.contacts[:2]])
                 pipeline_state.add_log(
-                    f"✅ QUALIFIED LEAD SAVED: '{job.company}' | Score: {enriched_lead.relevance_score}/100 | Contacts ({contacts_found}): {contact_preview or 'Company Domain'}",
+                    f"✅ QUALIFIED LEAD SAVED: '{job.company}' ({enriched_lead.company_size or 'Small'}) | Score: {enriched_lead.relevance_score}/100 | Contacts ({contacts_found}): {contact_preview or 'Company Domain'}",
                     "success"
                 )
 
@@ -250,7 +265,7 @@ def _execute_pipeline_task(req: RunPipelineRequest):
         # Log final summary
         pipeline_state.add_log("=" * 60, "info")
         pipeline_state.add_log(
-            f"📊 SUMMARY: Scraped: {metrics.total_scraped} | Unique Companies: {metrics.unique_companies_count} | Processed: {metrics.processed_by_agent} | Qualified Leads Saved: {metrics.saved_to_db} | Contacts Found: {metrics.total_contacts_discovered}",
+            f"📊 SUMMARY: Scraped: {metrics.total_scraped} | Unique Companies: {metrics.unique_companies_count} | Target Size: {target_size.upper()} | Processed: {metrics.processed_by_agent} | Qualified Leads Saved: {metrics.saved_to_db} | Contacts Found: {metrics.total_contacts_discovered}",
             "success"
         )
         pipeline_state.finish(metrics=metrics)
@@ -314,6 +329,7 @@ def get_leads(
     search: Optional[str] = Query(None, description="Search term for title or company"),
     site: Optional[str] = Query(None, description="Platform filter (linkedin, naukri, etc.)"),
     status: Optional[str] = Query(None, description="Lead status filter"),
+    company_size: Optional[str] = Query(None, description="Company size filter ('small', 'medium', 'large', 'all')"),
     min_score: int = Query(0, ge=0, le=100, description="Minimum relevance score"),
     has_contacts: Optional[bool] = Query(None, description="Filter for leads with found contacts"),
     limit: int = Query(50, ge=1, le=200),
@@ -333,18 +349,51 @@ def get_leads(
         if status and status.lower() != "all":
             query["status"] = status.lower()
 
-        if search:
-            regex_search = {"$regex": search, "$options": "i"}
-            query["$or"] = [
-                {"title": regex_search},
-                {"company": regex_search},
-                {"key_technologies": regex_search},
-                {"contacts.name": regex_search},
-                {"contacts.email": regex_search},
-            ]
-
         if has_contacts is True:
             query["contacts.0"] = {"$exists": True}
+
+        # Company Size Filter
+        if company_size and company_size.lower() != "all":
+            c_size = company_size.lower().strip()
+            if c_size == "small":
+                size_cond = {
+                    "$or": [
+                        {"company_size": {"$regex": "1-10|11-50|51-200|1-50|1-20|startup|small|boutique|seed", "$options": "i"}},
+                        {"company_size": None},
+                        {"company_size": "Unspecified"},
+                        {"company_size": "Unknown"},
+                    ]
+                }
+            elif c_size == "medium":
+                size_cond = {
+                    "company_size": {"$regex": "201-500|501-1000|201-1000|200-500|medium|mid", "$options": "i"}
+                }
+            elif c_size == "large":
+                size_cond = {
+                    "company_size": {"$regex": "1000\\+|5000\\+|10000\\+|enterprise|corporation|corporate|fortune", "$options": "i"}
+                }
+            else:
+                size_cond = None
+
+            if size_cond:
+                if "$and" not in query:
+                    query["$and"] = []
+                query["$and"].append(size_cond)
+
+        if search:
+            regex_search = {"$regex": search, "$options": "i"}
+            search_cond = {
+                "$or": [
+                    {"title": regex_search},
+                    {"company": regex_search},
+                    {"key_technologies": regex_search},
+                    {"contacts.name": regex_search},
+                    {"contacts.email": regex_search},
+                ]
+            }
+            if "$and" not in query:
+                query["$and"] = []
+            query["$and"].append(search_cond)
 
         total_matching = mongo_manager.leads_collection.count_documents(query)
         skip = (page - 1) * limit
@@ -526,6 +575,7 @@ def export_leads_csv(
     min_score: int = Query(0),
     site: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
+    company_size: Optional[str] = Query(None),
 ):
     """Export enriched leads to a downloadable CSV file."""
     try:
@@ -538,6 +588,20 @@ def export_leads_csv(
         if status and status.lower() != "all":
             query["status"] = status.lower()
 
+        if company_size and company_size.lower() != "all":
+            c_size = company_size.lower().strip()
+            if c_size == "small":
+                query["$or"] = [
+                    {"company_size": {"$regex": "1-10|11-50|51-200|1-50|1-20|startup|small|boutique|seed", "$options": "i"}},
+                    {"company_size": None},
+                    {"company_size": "Unspecified"},
+                    {"company_size": "Unknown"},
+                ]
+            elif c_size == "medium":
+                query["company_size"] = {"$regex": "201-500|501-1000|201-1000|200-500|medium|mid", "$options": "i"}
+            elif c_size == "large":
+                query["company_size"] = {"$regex": "1000\\+|5000\\+|10000\\+|enterprise|corporation|corporate|fortune", "$options": "i"}
+
         leads = list(mongo_manager.leads_collection.find(query).sort("created_at", -1))
 
         output = io.StringIO()
@@ -546,6 +610,7 @@ def export_leads_csv(
         # Headers
         writer.writerow([
             "Company",
+            "Company Size",
             "Job Title",
             "Domain",
             "Location",
@@ -568,6 +633,7 @@ def export_leads_csv(
             primary = contacts[0] if contacts else {}
             writer.writerow([
                 lead.get("company", ""),
+                lead.get("company_size", "Small"),
                 lead.get("title", ""),
                 lead.get("company_domain", ""),
                 lead.get("location", ""),

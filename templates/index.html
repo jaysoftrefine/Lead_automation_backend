@@ -185,20 +185,30 @@
               <!-- Advanced Settings Row -->
               <div class="form-row">
                 <div class="form-group flex-1">
-                  <label for="search-limit">Max Jobs to Scrape: <span id="limit-val" class="text-highlight">10</span></label>
+                  <label for="company-size">Target Company Size</label>
+                  <select id="company-size" class="custom-select">
+                    <option value="small" selected>🌱 Small / Startup (&lt; 200) [Default]</option>
+                    <option value="medium">🏢 Medium (201 - 1,000)</option>
+                    <option value="large">🏛️ Large / Enterprise (1,000+)</option>
+                    <option value="all">🌐 All Company Sizes</option>
+                  </select>
+                </div>
+
+                <div class="form-group flex-1">
+                  <label for="search-limit">Max Jobs: <span id="limit-val" class="text-highlight">10</span></label>
                   <input type="range" id="search-limit" min="1" max="50" value="10" step="1" oninput="document.getElementById('limit-val').innerText = this.value">
                 </div>
 
                 <div class="form-group flex-1">
-                  <label for="min-score">Min Relevance Score: <span id="score-val" class="text-highlight">40</span>/100</label>
+                  <label for="min-score">Min Score: <span id="score-val" class="text-highlight">40</span>/100</label>
                   <input type="range" id="min-score" min="0" max="90" value="40" step="5" oninput="document.getElementById('score-val').innerText = this.value">
                 </div>
 
                 <div class="form-group flex-1">
                   <label for="pipeline-provider">LLM Provider</label>
                   <select id="pipeline-provider" class="custom-select">
-                    <option value="gemini" selected>Google Gemini (gemini-3.5-flash-lite)</option>
-                    <option value="nvidia">NVIDIA NIM (Llama 3.3 70B)</option>
+                    <option value="gemini" selected>Google Gemini</option>
+                    <option value="nvidia">NVIDIA NIM (Llama 3.3)</option>
                   </select>
                 </div>
               </div>
@@ -268,6 +278,13 @@
             </div>
 
             <div class="filters-group">
+              <select id="filter-company-size" class="custom-select filter-select">
+                <option value="all">All Sizes</option>
+                <option value="small" selected>🌱 Small (&lt; 200)</option>
+                <option value="medium">🏢 Medium (201-1k)</option>
+                <option value="large">🏛️ Large (1k+)</option>
+              </select>
+
               <select id="filter-site" class="custom-select filter-select">
                 <option value="all">All Platforms</option>
                 <option value="linkedin">LinkedIn</option>

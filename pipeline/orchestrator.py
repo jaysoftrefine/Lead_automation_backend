@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 import time
 
 from core.logging import logger
+from core.company_filter import is_matching_company_size, classify_company_size
 from config.settings import settings
 from db.mongo import MongoManager, mongo_manager
 from db.models import RawJobPosting, EnrichedLead
@@ -19,6 +20,7 @@ class PipelineMetrics:
     search_term: str = ""
     location: str = ""
     sites: List[str] = field(default_factory=list)
+    target_company_size: str = "small"
     total_scraped: int = 0
     unique_companies_count: int = 0
     unique_companies: List[str] = field(default_factory=list)
@@ -26,6 +28,7 @@ class PipelineMetrics:
     processed_by_agent: int = 0
     saved_to_db: int = 0
     rejected_by_llm: int = 0
+    rejected_by_size: int = 0
     total_contacts_discovered: int = 0
     start_time: float = field(default_factory=time.time)
     end_time: Optional[float] = None
@@ -41,9 +44,9 @@ class LeadGenOrchestrator:
     Coordinates the full end-to-end workflow:
     1. Scrapes job listings from LinkedIn & Naukri via JobSpy.
     2. Persists raw jobs and performs deduplication checks.
-    3. Feeds new jobs one-by-one to the LLM thinking agent.
-    4. Executes live Tavily web research to locate recruiters and contact details.
-    5. Filters leads based on qualification criteria and stores strictly structured leads into MongoDB.
+    3. Feeds new jobs one-by-one to the LLM thinking agent with target company size heuristics.
+    4. Executes live Tavily web research to locate company size, recruiters, and contact details.
+    5. Filters leads based on qualification & company size criteria and stores strictly structured leads into MongoDB.
     """
 
     def __init__(
@@ -63,6 +66,7 @@ class LeadGenOrchestrator:
         search_term: str,
         location: str = "Remote",
         sites: Optional[List[str]] = None,
+        company_size: str = "small",
         results_limit: int = 20,
         hours_old: int = 72,
         skip_existing: bool = True,
@@ -72,16 +76,19 @@ class LeadGenOrchestrator:
         Execute the end-to-end lead generation pipeline with granular progress logging.
         """
         target_sites = sites or ["linkedin", "naukri"]
+        target_size = company_size or "small"
         metrics = PipelineMetrics(
             search_term=search_term,
             location=location,
             sites=target_sites,
+            target_company_size=target_size,
         )
 
         logger.info("=" * 70)
         logger.info(f"🚀 STARTING LEAD GEN PIPELINE")
         logger.info(f"🎯 Target Query    : '{search_term}'")
         logger.info(f"📍 Location        : '{location}'")
+        logger.info(f"🏢 Company Size Req: '{target_size.upper()}'")
         logger.info(f"🌐 Platforms       : {', '.join(target_sites)}")
         logger.info(f"🔢 Target Limit    : {results_limit} postings")
         logger.info(f"⭐ Min Score Req   : {self.min_relevance_score}/100")
@@ -126,7 +133,7 @@ class LeadGenOrchestrator:
             return metrics
 
         # 3. Process each job 1 by 1
-        logger.info(f"🧠 [Phase 2/2] Starting autonomous AI research & qualification loop...")
+        logger.info(f"🧠 [Phase 2/2] Starting autonomous AI research & qualification loop (Filter: {target_size.upper()} companies)...")
         total_jobs = len(raw_postings)
 
         for idx, job in enumerate(raw_postings, start=1):
@@ -146,8 +153,8 @@ class LeadGenOrchestrator:
             # Send to LLM Thinking & Research Agent
             metrics.processed_by_agent += 1
             try:
-                logger.info(f"🤖 Agent researching '{job.company}' (Domain, Decision Makers, Tech Stack)...")
-                enriched_lead: EnrichedLead = self.agent.enrich_job(job)
+                logger.info(f"🤖 Agent researching '{job.company}' (Domain, Company Size, Decision Makers, Tech Stack)...")
+                enriched_lead: EnrichedLead = self.agent.enrich_job(job, target_company_size=target_size)
 
                 # Qualification Filtering
                 if not enriched_lead.is_valid_lead:
@@ -165,6 +172,15 @@ class LeadGenOrchestrator:
                     metrics.rejected_by_llm += 1
                     continue
 
+                # Company Size Validation
+                if target_size != "all" and not is_matching_company_size(enriched_lead.company_size, target_filter=target_size):
+                    logger.warning(
+                        f"❌ REJECTED [Company Size Mismatch]: '{job.company}' ({enriched_lead.company_size or 'Unknown'}) does not match requested '{target_size}' size filter."
+                    )
+                    metrics.rejected_by_size += 1
+                    metrics.rejected_by_llm += 1
+                    continue
+
                 # Save qualified enriched lead to MongoDB
                 self.db.upsert_enriched_lead(enriched_lead)
                 metrics.saved_to_db += 1
@@ -173,7 +189,7 @@ class LeadGenOrchestrator:
 
                 contact_details = ", ".join([f"{c.name or 'Recruiter'} ({c.email or 'No email'})" for c in enriched_lead.contacts[:2]])
                 logger.info(
-                    f"✅ QUALIFIED LEAD SAVED: '{job.company}' | Score: {enriched_lead.relevance_score}/100 | Contacts ({contacts_count}): {contact_details or 'Company Domain'}"
+                    f"✅ QUALIFIED LEAD SAVED: '{job.company}' ({enriched_lead.company_size or 'Small'}) | Score: {enriched_lead.relevance_score}/100 | Contacts ({contacts_count}): {contact_details or 'Company Domain'}"
                 )
 
             except Exception as item_err:
@@ -188,10 +204,11 @@ class LeadGenOrchestrator:
         logger.info(f"⏱️  Duration            : {metrics.duration_seconds} seconds")
         logger.info(f"📥 Total Jobs Scraped  : {metrics.total_scraped}")
         logger.info(f"🏢 Unique Companies    : {metrics.unique_companies_count}")
+        logger.info(f"🎯 Target Company Size : {target_size.upper()}")
         logger.info(f"⏭️  Already In DB       : {metrics.already_existing} (Skipped)")
         logger.info(f"🧠 Processed by AI     : {metrics.processed_by_agent}")
         logger.info(f"✅ Qualified Leads     : {metrics.saved_to_db} ({(metrics.saved_to_db/max(1, metrics.processed_by_agent)*100):.1f}% yield)")
-        logger.info(f"❌ Rejected / Low Score: {metrics.rejected_by_llm}")
+        logger.info(f"❌ Rejected / Non-match: {metrics.rejected_by_llm} (Size Mismatch: {metrics.rejected_by_size})")
         logger.info(f"👥 Verified Contacts   : {metrics.total_contacts_discovered}")
         logger.info("=" * 70)
 
