@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LeadPulse AI • Autonomous B2B Lead Generation & Enrichment Engine</title>
+  
+  <!-- Google Fonts: Plus Jakarta Sans & JetBrains Mono -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  
+  <!-- Custom Glassmorphism CSS -->
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body class="dark-theme">
+  <!-- Subtle Glowing Ambient Background Elements -->
+  <div class="ambient-glow glow-1"></div>
+  <div class="ambient-glow glow-2"></div>
+  <div class="ambient-glow glow-3"></div>
+
+  <div class="app-layout">
+    
+    <!-- Top Navigation Header -->
+    <header class="app-header">
+      <div class="header-left">
+        <div class="brand-badge">
+          <div class="brand-icon">
+            <i data-lucide="sparkles"></i>
+          </div>
+          <div class="brand-text">
+            <div class="brand-title">LeadPulse <span class="accent-gradient">AI</span></div>
+            <div class="brand-subtitle">Autonomous B2B Job & Lead Enrichment Engine</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="header-right">
+        <!-- Status Pills -->
+        <div class="system-status-group">
+          <div id="mongo-status-pill" class="status-pill checking">
+            <span class="status-dot"></span>
+            <span class="status-text">MongoDB: Checking...</span>
+          </div>
+          <div id="llm-status-pill" class="status-pill info">
+            <i data-lucide="cpu" class="pill-icon"></i>
+            <span id="active-llm-label">LLM: Gemini</span>
+          </div>
+          <div id="tavily-status-pill" class="status-pill info">
+            <i data-lucide="search" class="pill-icon"></i>
+            <span id="active-tavily-label">Tavily: Live</span>
+          </div>
+        </div>
+
+        <button id="btn-refresh-all" class="btn btn-icon-ghost" title="Refresh Dashboard Stats & Leads">
+          <i data-lucide="rotate-cw"></i>
+        </button>
+      </div>
+    </header>
+
+    <!-- Main Workspace Container -->
+    <main class="main-container">
+      
+      <!-- Metrics Overview Cards Bar -->
+      <section class="metrics-grid">
+        <div class="metric-card glass-card">
+          <div class="metric-icon-box cyan">
+            <i data-lucide="users"></i>
+          </div>
+          <div class="metric-content">
+            <div class="metric-value" id="stat-total-leads">0</div>
+            <div class="metric-label">Enriched Qualified Leads</div>
+          </div>
+        </div>
+
+        <div class="metric-card glass-card">
+          <div class="metric-icon-box emerald">
+            <i data-lucide="mail-check"></i>
+          </div>
+          <div class="metric-content">
+            <div class="metric-value" id="stat-total-contacts">0</div>
+            <div class="metric-label">Verified Decision Makers</div>
+          </div>
+        </div>
+
+        <div class="metric-card glass-card">
+          <div class="metric-icon-box violet">
+            <i data-lucide="layers"></i>
+          </div>
+          <div class="metric-content">
+            <div class="metric-value" id="stat-total-raw">0</div>
+            <div class="metric-label">Scraped Job Postings</div>
+          </div>
+        </div>
+
+        <div class="metric-card glass-card">
+          <div class="metric-icon-box amber">
+            <i data-lucide="target"></i>
+          </div>
+          <div class="metric-content">
+            <div class="metric-value" id="stat-avg-score">0.0</div>
+            <div class="metric-label">Avg Quality Score</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- View Navigation Tabs -->
+      <nav class="nav-tabs-wrapper">
+        <div class="nav-tabs">
+          <button class="tab-btn active" data-tab="tab-pipeline">
+            <i data-lucide="play-circle"></i>
+            <span>Pipeline Runner</span>
+            <span id="pipeline-running-badge" class="running-indicator" style="display: none;"></span>
+          </button>
+          <button class="tab-btn" data-tab="tab-leads">
+            <i data-lucide="database"></i>
+            <span>Leads Explorer</span>
+            <span class="tab-badge" id="leads-count-badge">0</span>
+          </button>
+          <button class="tab-btn" data-tab="tab-instant-research">
+            <i data-lucide="bot"></i>
+            <span>Instant Agent Lab</span>
+          </button>
+        </div>
+      </nav>
+
+      <!-- TAB 1: Pipeline Runner -->
+      <section id="tab-pipeline" class="tab-panel active">
+        <div class="pipeline-grid">
+          <!-- Launcher Form Card -->
+          <div class="glass-card launcher-card">
+            <div class="card-header">
+              <div class="card-title-group">
+                <i data-lucide="zap" class="text-amber"></i>
+                <h2>Configure & Launch Pipeline</h2>
+              </div>
+              <p class="card-subtitle">Scrapes LinkedIn/Naukri, triggers autonomous LLM web research with Tavily, and saves leads.</p>
+            </div>
+
+            <form id="pipeline-form" class="pipeline-form">
+              <div class="form-row">
+                <div class="form-group flex-2">
+                  <label for="search-term">Target Job Title / Role Keyword <span class="req">*</span></label>
+                  <div class="input-with-icon">
+                    <i data-lucide="briefcase"></i>
+                    <input type="text" id="search-term" placeholder="e.g. Python Backend Developer, AI Engineer, Fullstack" required value="Python Developer">
+                  </div>
+                </div>
+
+                <div class="form-group flex-1">
+                  <label for="search-location">Location / Remote</label>
+                  <div class="input-with-icon">
+                    <i data-lucide="map-pin"></i>
+                    <input type="text" id="search-location" placeholder="e.g. Remote, San Francisco, India" value="Remote">
+                  </div>
+                </div>
+              </div>
+
+              <!-- Platforms Checklist -->
+              <div class="form-group">
+                <label>Target Job Platforms</label>
+                <div class="platforms-selector">
+                  <label class="checkbox-chip">
+                    <input type="checkbox" name="sites" value="linkedin" checked>
+                    <span class="chip-content"><i data-lucide="globe"></i> LinkedIn</span>
+                  </label>
+                  <label class="checkbox-chip">
+                    <input type="checkbox" name="sites" value="naukri" checked>
+                    <span class="chip-content"><i data-lucide="globe"></i> Naukri</span>
+                  </label>
+                  <label class="checkbox-chip">
+                    <input type="checkbox" name="sites" value="indeed">
+                    <span class="chip-content"><i data-lucide="globe"></i> Indeed</span>
+                  </label>
+                  <label class="checkbox-chip">
+                    <input type="checkbox" name="sites" value="glassdoor">
+                    <span class="chip-content"><i data-lucide="globe"></i> Glassdoor</span>
+                  </label>
+                </div>
+              </div>
+
+              <!-- Advanced Settings Row -->
+              <div class="form-row">
+                <div class="form-group flex-1">
+                  <label for="search-limit">Max Jobs to Scrape: <span id="limit-val" class="text-highlight">10</span></label>
+                  <input type="range" id="search-limit" min="1" max="50" value="10" step="1" oninput="document.getElementById('limit-val').innerText = this.value">
+                </div>
+
+                <div class="form-group flex-1">
+                  <label for="min-score">Min Relevance Score: <span id="score-val" class="text-highlight">40</span>/100</label>
+                  <input type="range" id="min-score" min="0" max="90" value="40" step="5" oninput="document.getElementById('score-val').innerText = this.value">
+                </div>
+
+                <div class="form-group flex-1">
+                  <label for="pipeline-provider">LLM Provider</label>
+                  <select id="pipeline-provider" class="custom-select">
+                    <option value="gemini" selected>Google Gemini (gemini-3.5-flash-lite)</option>
+                    <option value="nvidia">NVIDIA NIM (Llama 3.3 70B)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="form-actions">
+                <button type="submit" id="btn-start-pipeline" class="btn btn-primary btn-large">
+                  <i data-lucide="play"></i>
+                  <span>Start Autonomous Lead Pipeline</span>
+                </button>
+                <button type="button" id="btn-stop-pipeline" class="btn btn-danger" style="display: none;">
+                  <i data-lucide="square"></i>
+                  <span>Stop Pipeline</span>
+                </button>
+              </div>
+            </form>
+          </div>
+
+          <!-- Live Progress & Terminal Output Card -->
+          <div class="glass-card terminal-card">
+            <div class="card-header">
+              <div class="card-title-group">
+                <i data-lucide="terminal" class="text-emerald"></i>
+                <h2>Live Agent Activity & Stream</h2>
+              </div>
+              <div class="terminal-status-indicator" id="live-indicator">
+                <span class="pulse-dot"></span>
+                <span id="live-indicator-text">Idle</span>
+              </div>
+            </div>
+
+            <!-- Progress Summary Bar -->
+            <div class="pipeline-progress-box" id="progress-box" style="display: none;">
+              <div class="progress-details">
+                <span id="progress-job-label">Researching job postings...</span>
+                <span id="progress-count-label" class="text-highlight">0 / 0</span>
+              </div>
+              <div class="progress-bar-bg">
+                <div class="progress-bar-fill" id="progress-fill" style="width: 0%;"></div>
+              </div>
+            </div>
+
+            <!-- Terminal Logs Window -->
+            <div class="terminal-window" id="terminal-window">
+              <div class="terminal-empty-state" id="terminal-placeholder">
+                <i data-lucide="command" class="terminal-empty-icon"></i>
+                <p>Pipeline is idle. Click <strong>"Start Autonomous Lead Pipeline"</strong> above to begin real-time scraping, agent thinking, and contact discovery.</p>
+              </div>
+              <div class="terminal-logs-list" id="terminal-logs"></div>
+            </div>
+
+            <div class="terminal-footer">
+              <span class="text-muted" id="last-updated-text">Ready</span>
+              <button class="btn btn-sm btn-ghost" id="btn-clear-logs">Clear Logs</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 2: Leads Explorer -->
+      <section id="tab-leads" class="tab-panel">
+        <div class="leads-container glass-card">
+          <!-- Toolbar & Filters -->
+          <div class="leads-toolbar">
+            <div class="search-box">
+              <i data-lucide="search"></i>
+              <input type="text" id="lead-search-input" placeholder="Search by role, company, contact name, or email...">
+            </div>
+
+            <div class="filters-group">
+              <select id="filter-site" class="custom-select filter-select">
+                <option value="all">All Platforms</option>
+                <option value="linkedin">LinkedIn</option>
+                <option value="naukri">Naukri</option>
+                <option value="indeed">Indeed</option>
+              </select>
+
+              <select id="filter-status" class="custom-select filter-select">
+                <option value="all">All Statuses</option>
+                <option value="new">New</option>
+                <option value="contacted">Contacted</option>
+                <option value="qualified">Qualified</option>
+                <option value="rejected">Rejected</option>
+                <option value="archived">Archived</option>
+              </select>
+
+              <div class="score-filter-pill">
+                <span>Min Score:</span>
+                <input type="number" id="filter-min-score" min="0" max="100" value="0" class="score-num-input">
+              </div>
+
+              <!-- Export Buttons -->
+              <div class="export-actions">
+                <a href="/api/export/csv" id="btn-export-csv" class="btn btn-secondary btn-sm" download>
+                  <i data-lucide="download"></i>
+                  <span>Export CSV</span>
+                </a>
+                <button id="btn-refresh-leads" class="btn btn-icon-ghost" title="Reload leads">
+                  <i data-lucide="refresh-cw"></i>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Leads List / Table -->
+          <div class="leads-results-wrapper">
+            <div id="leads-loading-spinner" class="loading-state" style="display: none;">
+              <div class="spinner"></div>
+              <span>Fetching qualified leads from MongoDB...</span>
+            </div>
+
+            <div id="leads-empty-state" class="empty-state" style="display: none;">
+              <i data-lucide="inbox"></i>
+              <h3>No Enriched Leads Found</h3>
+              <p>Try running the lead pipeline or adjusting your filters to view discovered leads.</p>
+            </div>
+
+            <div id="leads-list-container" class="leads-cards-grid">
+              <!-- Dynamically populated -->
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 3: Instant Agent Lab (Direct Single-Job Test) -->
+      <section id="tab-instant-research" class="tab-panel">
+        <div class="lab-grid">
+          <!-- Input Card -->
+          <div class="glass-card lab-card">
+            <div class="card-header">
+              <div class="card-title-group">
+                <i data-lucide="flask-conical" class="text-violet"></i>
+                <h2>Instant Research Sandbox</h2>
+              </div>
+              <p class="card-subtitle">Test the Autonomous Thinking Agent + Tavily Search on any company & title on demand without scraping.</p>
+            </div>
+
+            <form id="instant-research-form" class="instant-form">
+              <div class="form-group">
+                <label for="lab-company">Target Company Name <span class="req">*</span></label>
+                <div class="input-with-icon">
+                  <i data-lucide="building-2"></i>
+                  <input type="text" id="lab-company" placeholder="e.g. Stripe, OpenAI, Anthropic, Datadog" required value="Stripe">
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label for="lab-title">Role / Opportunity Title <span class="req">*</span></label>
+                <div class="input-with-icon">
+                  <i data-lucide="tag"></i>
+                  <input type="text" id="lab-title" placeholder="e.g. Senior Infrastructure Engineer" required value="Senior Infrastructure Engineer">
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label for="lab-description">Job Description / Requirements (Optional Context)</label>
+                <textarea id="lab-description" rows="3" placeholder="Paste any job requirements, tech stack mentions, or context for the agent..."></textarea>
+              </div>
+
+              <button type="submit" id="btn-run-lab" class="btn btn-primary btn-large">
+                <i data-lucide="sparkles"></i>
+                <span>Execute Agent Research Loop</span>
+              </button>
+            </form>
+          </div>
+
+          <!-- Output Preview Card -->
+          <div class="glass-card lab-result-card">
+            <div class="card-header">
+              <div class="card-title-group">
+                <i data-lucide="check-circle-2" class="text-emerald"></i>
+                <h2>Agent Reasoning & Output</h2>
+              </div>
+            </div>
+
+            <div id="lab-result-placeholder" class="lab-empty">
+              <i data-lucide="cpu" class="empty-icon"></i>
+              <p>Enter a company and job title on the left to trigger real-time web research, verified contact discovery, and structured data synthesis.</p>
+            </div>
+
+            <div id="lab-loading" class="loading-state" style="display: none;">
+              <div class="spinner"></div>
+              <span>Agent is reasoning, querying Tavily, and extracting decision-maker contacts...</span>
+            </div>
+
+            <div id="lab-result-content" class="lab-result-box" style="display: none;">
+              <!-- Dynamic Result -->
+            </div>
+          </div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <!-- Full Lead Details & Thinking Process Modal -->
+  <div id="lead-modal" class="modal-backdrop">
+    <div class="modal-dialog glass-card">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <span id="modal-company-badge" class="platform-badge">Company</span>
+          <h2 id="modal-title">Lead Details</h2>
+        </div>
+        <button id="btn-close-modal" class="btn-close">&times;</button>
+      </div>
+
+      <div class="modal-body" id="modal-body-content">
+        <!-- Injected via JavaScript -->
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification Container -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <!-- Custom Scripts -->
+  <script src="/static/js/app.js"></script>
+</body>
+</html>
