@@ -120,10 +120,11 @@ Conduct an in-depth Chain-of-Thought (COT) analysis of the following job posting
 
 ### REQUIRED CHAIN-OF-THOUGHT (COT) BREAKDOWN:
 1. Entity & Company Size Assessment: Is this a direct employer? What is the estimated company size (e.g. startup/small 1-10 or 11-50 [max 50], medium 51-500, enterprise 500+)? Does it match the target size focus ({state.get('target_company_size', 'small')})?
-2. Job Type / Freelance Suitability: Is this a genuine contract/freelance role or standard full-time corporate position? Does it align with target job type ({state.get('target_job_type', 'all')})?
-3. Technical Stack: What core technologies, tools, and platforms are needed?
-4. Hiring Signal: What indicates urgency, growth, or contract opportunities?
-5. Information Gaps: What missing details must be researched (e.g. company domain, company headcount, recruiter names on LinkedIn, engineering leadership, contact email/phone)?
+2. Executive Target Personas: Who is the Founder, Co-Founder, Owner, CEO, CTO, COO, Director, or Product Manager (PM) leading this team?
+3. Job Type / Freelance Suitability: Is this a genuine contract/freelance role or standard full-time corporate position? Does it align with target job type ({state.get('target_job_type', 'all')})?
+4. Technical Stack: What core technologies, tools, and platforms are needed?
+5. Hiring Signal: What indicates urgency, growth, or direct outreach opportunity to leadership?
+6. Leadership Discovery Strategy: What targeted search queries will find the Founder, CEO, CTO, Director, or PM on LinkedIn with their direct email/contact?
 
 Output your structured reasoning clearly."""
 
@@ -140,30 +141,30 @@ Output your structured reasoning clearly."""
         return {"cot_reasoning": cot_text}
 
     def _node_coa_plan_searches(self, state: LeadState) -> Dict[str, Any]:
-        """Chain-of-Action (COA) Planner: Formulates laser-targeted search queries based on COT."""
+        """Chain-of-Action (COA) Planner: Formulates laser-targeted executive search queries based on COT."""
         iteration = state.get("iteration", 0) + 1
         executed = set(state.get("executed_queries", []))
         company = state["company"].strip()
         location = state["location"].strip()
 
-        # Deterministic strategic query formulations
+        # Deterministic strategic query formulations focusing on C-suite & leadership
         planned_queries = []
         
         if iteration == 1:
-            # Phase 1: Core Domain, Location Headquarters, Company Size & Recruiter LinkedIn
-            q1 = f'"{company}" official website company domain headquarters'
-            q2 = f'"{company}" employees OR headcount OR "company size" LinkedIn'
-            q3 = f'"{company}" "{location}" "technical recruiter" OR "talent acquisition" LinkedIn'
-            q4 = f'"{company}" "CTO" OR "Engineering Manager" OR "Head of Engineering" LinkedIn'
-            q5 = f'"{company}" careers contact email OR jobs email'
+            # Phase 1: Founders, CEO, CTO, Directors, PM, Company Domain & Headcount
+            q1 = f'"{company}" ("Founder" OR "Co-Founder" OR "CEO" OR "Owner") LinkedIn'
+            q2 = f'"{company}" ("CTO" OR "Chief Technology Officer" OR "Director" OR "VP") LinkedIn'
+            q3 = f'"{company}" ("COO" OR "Product Manager" OR "Head of Engineering") LinkedIn'
+            q4 = f'"{company}" official website company domain headquarters headcount'
+            q5 = f'"{company}" ("Founder" OR "CEO" OR "CTO" OR "Director") email OR contact'
             
             for q in [q1, q2, q3, q4, q5]:
                 if q not in executed:
                     planned_queries.append(q)
         else:
-            # Phase 2: Refinement for direct contacts & phone
-            q_refine_1 = f'"{company}" contact phone number corporate office'
-            q_refine_2 = f'"{company}" recruiter email contact "@"'
+            # Phase 2: Executive contact details, email patterns & direct phone
+            q_refine_1 = f'"{company}" ("CEO" OR "Founder" OR "CTO" OR "Director") email contact "@"'
+            q_refine_2 = f'"{company}" executive contact phone number corporate office'
             for q in [q_refine_1, q_refine_2]:
                 if q not in executed:
                     planned_queries.append(q)
@@ -260,7 +261,7 @@ Synthesize all discoveries into the exact structured schema.
 Extract:
 1. Official company domain (e.g. stripe.com)
 2. Accurate company size classification (e.g. '1-10 employees', '11-50 employees' for small; '51-200 employees', '201-500 employees' for medium; '500+ employees' for enterprise)
-3. Verified recruiter / executive / hiring contacts with role, email, phone, and confidence scores (0-100)
+3. Verified TOP DECISION-MAKER contacts prioritizing: Founder, Co-Founder, CEO, CTO, COO, Director, Product Manager (PM), Owner (with full name, exact executive title/role, LinkedIn URL, email, phone, and confidence score 0-100)
 4. Key technical stack & skills
 5. Relevance score (0-100) and hiring urgency
 6. Comprehensive step-by-step thinking process detailing the evidence found."""

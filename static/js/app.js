@@ -380,11 +380,21 @@ document.addEventListener("DOMContentLoaded", () => {
       const domainDisplay = lead.company_domain ? `<a href="https://${lead.company_domain}" target="_blank" class="domain-link"><i data-lucide="external-link" style="width: 12px; height: 12px; display: inline;"></i> ${escapeHtml(lead.company_domain)}</a>` : "";
 
       const contactsHtml = contacts.length > 0 
-        ? contacts.slice(0, 3).map(c => `
+        ? contacts.slice(0, 3).map(c => {
+            const roleLower = (c.role || "").toLowerCase();
+            let roleBadge = "";
+            if (roleLower.includes("founder") || roleLower.includes("owner")) roleBadge = "👑 ";
+            else if (roleLower.includes("ceo")) roleBadge = "👑 ";
+            else if (roleLower.includes("cto")) roleBadge = "⚡ ";
+            else if (roleLower.includes("coo")) roleBadge = "💼 ";
+            else if (roleLower.includes("director")) roleBadge = "🎯 ";
+            else if (roleLower.includes("product") || roleLower.includes("pm")) roleBadge = "🚀 ";
+
+            return `
             <div class="contact-person-card">
               <div class="contact-info-col">
-                <span class="contact-name-role">${escapeHtml(c.name || "Hiring Decision Maker")}</span>
-                <span class="contact-role-sub">${escapeHtml(c.role || "Recruiter / Lead")}</span>
+                <span class="contact-name-role">${escapeHtml(c.name || "Executive Decision Maker")}</span>
+                <span class="contact-role-sub">${roleBadge}<strong style="color:#e2e8f0;">${escapeHtml(c.role || "Founder / Executive")}</strong></span>
                 ${c.email ? `
                   <div style="display:flex; align-items:center; gap:6px; margin-top:2px;">
                     <span style="font-size:0.75rem; color:var(--accent-cyan); font-weight:500;">✉ ${escapeHtml(c.email)}</span>
@@ -393,11 +403,12 @@ document.addEventListener("DOMContentLoaded", () => {
               </div>
               <div class="contact-actions">
                 ${c.email ? `<button class="btn-copy-email" onclick="window.copyToClipboard('${c.email}', this)"><i data-lucide="copy" style="width:12px;height:12px;display:inline;"></i> Copy</button>` : ''}
-                ${c.linkedin_url ? `<a href="${c.linkedin_url}" target="_blank" class="domain-link"><i data-lucide="linkedin" style="width:14px;height:14px;display:inline;"></i></a>` : ''}
+                ${c.linkedin_url ? `<a href="${c.linkedin_url}" target="_blank" class="domain-link" title="Open LinkedIn Profile"><i data-lucide="linkedin" style="width:14px;height:14px;display:inline;"></i></a>` : ''}
               </div>
             </div>
-          `).join("")
-        : `<span class="text-muted" style="font-size: 0.75rem;">No direct individual contacts found. General company domain available.</span>`;
+          `;
+          }).join("")
+        : `<span class="text-muted" style="font-size: 0.75rem;">No direct leadership contacts found. Official company domain available.</span>`;
 
       const techTags = (lead.key_technologies || []).slice(0, 5).map(t => `<span class="tech-tag">${escapeHtml(t)}</span>`).join("");
 
@@ -433,7 +444,7 @@ document.addEventListener("DOMContentLoaded", () => {
           <div class="lead-contacts-section">
             <div class="contacts-header">
               <i data-lucide="users" style="width: 14px; height: 14px;"></i>
-              <span>Discovered Contacts (${contacts.length})</span>
+              <span>Key Leadership & Decision Makers (${contacts.length})</span>
             </div>
             ${contactsHtml}
           </div>
@@ -523,8 +534,8 @@ document.addEventListener("DOMContentLoaded", () => {
       </div>
 
       <div>
-        <h4 style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.4rem;">VERIFIED DECISION MAKERS & RECRUITERS</h4>
-        ${contactsList || '<p class="text-muted">No individual contacts found.</p>'}
+        <h4 style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.4rem;">FOUNDERS & EXECUTIVE DECISION MAKERS (CEO, CTO, DIRECTORS, PM)</h4>
+        ${contactsList || '<p class="text-muted">No individual leadership contacts found.</p>'}
       </div>
 
       ${queriesList ? `
