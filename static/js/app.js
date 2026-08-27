@@ -407,13 +407,19 @@ document.addEventListener("DOMContentLoaded", () => {
           </div>
 
           <div class="lead-job-title">
-            <span>${escapeHtml(lead.title)}</span>
+            <a href="${escapeHtml(lead.job_url)}" target="_blank" class="job-title-link" title="Open Job Posting on ${escapeHtml(lead.site.toUpperCase())}">
+              <span>${escapeHtml(lead.title)}</span>
+              <i data-lucide="external-link" style="width:13px;height:13px;opacity:0.85;"></i>
+            </a>
           </div>
 
           <div class="lead-meta-row">
             <span class="lead-meta-pill" style="color: var(--accent-emerald); background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.2);"><i data-lucide="building-2" style="width:12px;height:12px;"></i> ${escapeHtml(lead.company_size || "11-50 employees")}</span>
             <span class="lead-meta-pill" style="color: #f59e0b; background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.2);"><i data-lucide="briefcase" style="width:12px;height:12px;"></i> ${escapeHtml(lead.job_type || "Contract")}</span>
-            <span class="lead-meta-pill"><i data-lucide="globe" style="width:12px;height:12px;"></i> ${escapeHtml(lead.site.toUpperCase())}</span>
+            <a href="${escapeHtml(lead.job_url)}" target="_blank" class="lead-meta-pill platform-link-pill" title="View Original Post on ${escapeHtml(lead.site.toUpperCase())}">
+              <i data-lucide="${lead.site.toLowerCase() === 'linkedin' ? 'linkedin' : 'globe'}" style="width:12px;height:12px;"></i>
+              ${escapeHtml(lead.site.toUpperCase())} Post
+            </a>
             <span class="lead-meta-pill"><i data-lucide="map-pin" style="width:12px;height:12px;"></i> ${escapeHtml(lead.location || "Remote")}</span>
             ${lead.hiring_urgency ? `<span class="lead-meta-pill text-amber"><i data-lucide="clock" style="width:12px;height:12px;"></i> ${escapeHtml(lead.hiring_urgency)} Urgency</span>` : ''}
           </div>
@@ -431,10 +437,16 @@ document.addEventListener("DOMContentLoaded", () => {
 
           <div class="lead-card-footer">
             <span class="text-muted">Status: <strong class="text-highlight">${escapeHtml(lead.status || 'new')}</strong></span>
-            <button class="btn btn-secondary btn-sm" onclick="window.openLeadModal('${encodeURIComponent(lead.job_url)}')">
-              <i data-lucide="eye" style="width: 14px; height: 14px;"></i>
-              <span>View Reasoning & Details</span>
-            </button>
+            <div class="lead-card-actions">
+              <a href="${escapeHtml(lead.job_url)}" target="_blank" class="btn btn-secondary btn-sm btn-job-post-link" title="Open Job on ${escapeHtml(lead.site.toUpperCase())}">
+                <i data-lucide="${lead.site.toLowerCase() === 'linkedin' ? 'linkedin' : 'external-link'}" style="width: 13px; height: 13px;"></i>
+                <span>${lead.site.toLowerCase() === 'linkedin' ? 'LinkedIn Post' : (escapeHtml(lead.site.toUpperCase()) + ' Post')}</span>
+              </a>
+              <button class="btn btn-secondary btn-sm" onclick="window.openLeadModal('${encodeURIComponent(lead.job_url)}')">
+                <i data-lucide="eye" style="width: 14px; height: 14px;"></i>
+                <span>View Details</span>
+              </button>
+            </div>
           </div>
         </div>
       `;
@@ -471,8 +483,30 @@ document.addEventListener("DOMContentLoaded", () => {
     const queriesList = (lead.search_queries_used || []).map(q => `<li style="font-size:0.8rem; color:var(--text-secondary);">${escapeHtml(q)}</li>`).join("");
 
     modalBodyContent.innerHTML = `
+      <!-- Prominent Source Job Post URL Banner -->
+      <div class="modal-source-banner">
+        <div class="source-info">
+          <span class="source-label">
+            <i data-lucide="${lead.site.toLowerCase() === 'linkedin' ? 'linkedin' : 'globe'}" style="width:14px;height:14px;color:#38bdf8;"></i>
+            <span>Origin: <strong>${escapeHtml(lead.site.toUpperCase())} Job Posting</strong></span>
+          </span>
+          <a href="${escapeHtml(lead.job_url)}" target="_blank" class="source-url-text" title="Open ${escapeHtml(lead.job_url)}">
+            ${escapeHtml(lead.job_url)}
+          </a>
+        </div>
+        <div class="source-btns">
+          <button class="btn btn-secondary btn-sm" onclick="window.copyToClipboard('${escapeHtml(lead.job_url)}', this)">
+            <i data-lucide="copy" style="width:12px;height:12px;"></i> Copy URL
+          </button>
+          <a href="${escapeHtml(lead.job_url)}" target="_blank" class="btn btn-primary btn-sm">
+            <i data-lucide="external-link" style="width:13px;height:13px;"></i> Open ${lead.site.toLowerCase() === 'linkedin' ? 'LinkedIn' : lead.site.toUpperCase()} Post
+          </a>
+        </div>
+      </div>
+
       <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 0.5rem;">
-        <span class="lead-meta-pill" style="color: var(--accent-emerald); background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.2);"><i data-lucide="building-2" style="width:12px;height:12px;"></i> Size: ${escapeHtml(lead.company_size || 'Small')}</span>
+        <span class="lead-meta-pill" style="color: var(--accent-emerald); background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.2);"><i data-lucide="building-2" style="width:12px;height:12px;"></i> Size: ${escapeHtml(lead.company_size || '11-50 employees')}</span>
+        <span class="lead-meta-pill" style="color: #f59e0b; background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.2);"><i data-lucide="briefcase" style="width:12px;height:12px;"></i> ${escapeHtml(lead.job_type || 'Contract')}</span>
         <span class="lead-meta-pill"><i data-lucide="map-pin" style="width:12px;height:12px;"></i> ${escapeHtml(lead.location || 'Remote')}</span>
         <span class="lead-meta-pill"><i data-lucide="globe" style="width:12px;height:12px;"></i> ${escapeHtml(lead.site.toUpperCase())}</span>
         ${lead.hiring_urgency ? `<span class="lead-meta-pill text-amber"><i data-lucide="clock" style="width:12px;height:12px;"></i> ${escapeHtml(lead.hiring_urgency)} Urgency</span>` : ''}
