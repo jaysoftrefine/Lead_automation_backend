@@ -1264,3 +1264,52 @@ select.custom-select option {
   border-radius: var(--radius-full);
   letter-spacing: 0.02em;
 }
+
+/* Post / Job Description Snippet on Lead Cards */
+.lead-post-snippet {
+  background: rgba(15, 23, 42, 0.45);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-sm);
+  padding: 0.65rem 0.8rem;
+  font-size: 0.82rem;
+  color: #94a3b8;
+  line-height: 1.5;
+}
+
+.lead-post-snippet .snippet-label {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #38bdf8;
+  margin-bottom: 0.3rem;
+}
+
+.lead-post-snippet .post-text-content {
+  margin: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #cbd5e1;
+}
+
+/* Full Job / Post Description Box in Modal */
+.job-description-box {
+  background: rgba(15, 23, 42, 0.75);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: var(--radius-md);
+  padding: 1rem;
+  font-size: 0.85rem;
+  color: #cbd5e1;
+  line-height: 1.65;
+  max-height: 240px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+

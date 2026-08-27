@@ -451,6 +451,15 @@ document.addEventListener("DOMContentLoaded", () => {
             ${contactsHtml}
           </div>
 
+          <!-- Post / Job Description Excerpt -->
+          <div class="lead-post-snippet">
+            <div class="snippet-label">
+              <i data-lucide="file-text" style="width:12px;height:12px;"></i>
+              <span>Original Post Excerpt</span>
+            </div>
+            <p class="post-text-content">${escapeHtml(lead.job_description || lead.lead_summary || lead.company_summary || 'No post text preview available.')}</p>
+          </div>
+
           ${techTags ? `<div class="tech-tags-list">${techTags}</div>` : ''}
 
           <div class="lead-card-footer">
@@ -545,6 +554,11 @@ document.addEventListener("DOMContentLoaded", () => {
         <h4 style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.4rem;">TAVILY SEARCH QUERIES EXECUTED</h4>
         <ul style="padding-left: 1.25rem;">${queriesList}</ul>
       </div>` : ''}
+
+      <div>
+        <h4 style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.4rem;">ORIGINAL LINKEDIN JOB POST / DESCRIPTION</h4>
+        <div class="job-description-box">${escapeHtml(lead.job_description || lead.lead_summary || 'No original post description recorded.')}</div>
+      </div>
 
       <div>
         <h4 style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.4rem;">AGENT THINKING & RESEARCH TRAIL</h4>
