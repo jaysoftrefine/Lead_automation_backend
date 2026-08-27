@@ -205,6 +205,18 @@
                 </div>
 
                 <div class="form-group flex-1">
+                  <label for="hours-old">Date Posted</label>
+                  <select id="hours-old" class="custom-select">
+                    <option value="24">⚡ Past 24 Hours (1 Day)</option>
+                    <option value="72" selected>📅 Past 3 Days [Default]</option>
+                    <option value="168">📆 Past 7 Days (1 Week)</option>
+                    <option value="336">🗓️ Past 14 Days (2 Weeks)</option>
+                    <option value="720">🌙 Past 30 Days (1 Month)</option>
+                    <option value="0">🌐 Any Time</option>
+                  </select>
+                </div>
+
+                <div class="form-group flex-1">
                   <label for="search-limit">Max Jobs: <span id="limit-val" class="text-highlight">10</span></label>
                   <input type="range" id="search-limit" min="1" max="50" value="10" step="1" oninput="document.getElementById('limit-val').innerText = this.value">
                 </div>
@@ -300,6 +312,14 @@
                 <option value="contract">🤝 Freelance / Contract</option>
                 <option value="fulltime">💼 Full-time</option>
                 <option value="parttime">⏱️ Part-time</option>
+              </select>
+
+              <select id="filter-date-posted" class="custom-select filter-select">
+                <option value="all">Any Date</option>
+                <option value="24">⚡ Past 24h</option>
+                <option value="72">📅 Past 3d</option>
+                <option value="168">📆 Past 7d (1w)</option>
+                <option value="720">🌙 Past 30d (1m)</option>
               </select>
 
               <select id="filter-site" class="custom-select filter-select">

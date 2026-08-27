@@ -166,6 +166,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const location = document.getElementById("search-location").value.trim();
     const companySize = document.getElementById("company-size") ? document.getElementById("company-size").value : "small";
     const jobType = document.getElementById("job-type") ? document.getElementById("job-type").value : "all";
+    const hoursOld = document.getElementById("hours-old") ? parseInt(document.getElementById("hours-old").value, 10) : 72;
     const limit = parseInt(document.getElementById("search-limit").value, 10);
     const minScore = parseInt(document.getElementById("min-score").value, 10);
     const provider = document.getElementById("pipeline-provider").value;
@@ -191,7 +192,7 @@ document.addEventListener("DOMContentLoaded", () => {
     progressBox.style.display = "block";
     progressFill.style.width = "5%";
     progressCountLabel.innerText = "0 / ?";
-    progressJobLabel.innerText = `Connecting to ${checkedSites.join(", ")} and scraping '${searchTerm}' (Target: ${companySize.toUpperCase()} [Max 50], ${jobType.toUpperCase()})...`;
+    progressJobLabel.innerText = `Connecting to ${checkedSites.join(", ")} and scraping '${searchTerm}' (Target: ${companySize.toUpperCase()} [Max 50], ${jobType.toUpperCase()}, ${hoursOld > 0 ? (hoursOld + 'h') : 'All dates'})...`;
 
     try {
       const res = await fetch(`${API_BASE}/api/pipeline/run`, {
@@ -202,6 +203,7 @@ document.addEventListener("DOMContentLoaded", () => {
           location: location,
           company_size: companySize,
           job_type: jobType,
+          hours_old: hoursOld,
           sites: checkedSites,
           limit: limit,
           min_score: minScore,
@@ -327,6 +329,8 @@ document.addEventListener("DOMContentLoaded", () => {
     const companySize = filterCompanySize ? filterCompanySize.value : "all";
     const filterJobType = document.getElementById("filter-job-type");
     const jobType = filterJobType ? filterJobType.value : "all";
+    const filterDatePosted = document.getElementById("filter-date-posted");
+    const dateVal = filterDatePosted ? filterDatePosted.value : "all";
     const site = filterSite.value;
     const status = filterStatus.value;
     const minScore = filterMinScore.value;
@@ -335,6 +339,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (search) params.append("search", search);
     if (companySize && companySize !== "all") params.append("company_size", companySize);
     if (jobType && jobType !== "all") params.append("job_type", jobType);
+    if (dateVal && dateVal !== "all") params.append("hours_old", dateVal);
     if (site && site !== "all") params.append("site", site);
     if (status && status !== "all") params.append("status", status);
     if (minScore > 0) params.append("min_score", minScore);
@@ -679,6 +684,8 @@ document.addEventListener("DOMContentLoaded", () => {
   if (filterCompanySize) filterCompanySize.addEventListener("change", fetchLeads);
   const filterJobTypeEl = document.getElementById("filter-job-type");
   if (filterJobTypeEl) filterJobTypeEl.addEventListener("change", fetchLeads);
+  const filterDatePostedEl = document.getElementById("filter-date-posted");
+  if (filterDatePostedEl) filterDatePostedEl.addEventListener("change", fetchLeads);
   filterSite.addEventListener("change", fetchLeads);
   filterStatus.addEventListener("change", fetchLeads);
   filterMinScore.addEventListener("input", debounce(fetchLeads, 400));

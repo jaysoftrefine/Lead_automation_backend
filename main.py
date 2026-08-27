@@ -129,11 +129,18 @@ def clear_db_command(force: bool, drop: bool):
 @click.option("--min-score", default=0, type=int, help="Filter by minimum relevance score")
 @click.option("--company-size", "-c", default=None, help="Filter by company size ('small', 'medium', 'large')")
 @click.option("--job-type", "-t", default=None, help="Filter by job type ('contract', 'fulltime', 'parttime')")
-def list_leads(limit: int, min_score: int, company_size: str, job_type: str):
+@click.option("--hours-old", "-h", default=None, type=int, help="Filter leads found within last N hours (e.g. 24, 72, 168, 720)")
+def list_leads(limit: int, min_score: int, company_size: str, job_type: str, hours_old: int):
     """List enriched leads saved in MongoDB."""
     try:
+        from datetime import datetime, timedelta
         mongo_manager.connect()
         query = {"relevance_score": {"$gte": min_score}}
+        
+        if hours_old and hours_old > 0:
+            time_cutoff = datetime.utcnow() - timedelta(hours=hours_old)
+            query["created_at"] = {"$gte": time_cutoff}
+
         if company_size and company_size.lower() != "all":
             if company_size.lower() == "small":
                 query["$and"] = [

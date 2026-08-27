@@ -6,7 +6,7 @@ import json
 import threading
 import time
 import urllib.parse
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Query, Response
@@ -344,6 +344,7 @@ def get_leads(
     status: Optional[str] = Query(None, description="Lead status filter"),
     company_size: Optional[str] = Query(None, description="Company size filter ('small', 'medium', 'large', 'all')"),
     job_type: Optional[str] = Query(None, description="Job type filter ('contract', 'fulltime', 'parttime', 'all')"),
+    hours_old: Optional[int] = Query(None, description="Filter leads found within last N hours (e.g. 24, 72, 168, 720)"),
     min_score: int = Query(0, ge=0, le=100, description="Minimum relevance score"),
     has_contacts: Optional[bool] = Query(None, description="Filter for leads with found contacts"),
     limit: int = Query(50, ge=1, le=200),
@@ -365,6 +366,13 @@ def get_leads(
 
         if has_contacts is True:
             query["contacts.0"] = {"$exists": True}
+
+        # Date / Recency Filter
+        if hours_old and hours_old > 0:
+            time_cutoff = datetime.utcnow() - timedelta(hours=hours_old)
+            if "$and" not in query:
+                query["$and"] = []
+            query["$and"].append({"created_at": {"$gte": time_cutoff}})
 
         # Strict Company Size Filter (Small = MAX 50 employees: 1-10, 11-50)
         if company_size and company_size.lower() != "all":
@@ -623,6 +631,7 @@ def export_leads_csv(
     status: Optional[str] = Query(None),
     company_size: Optional[str] = Query(None),
     job_type: Optional[str] = Query(None),
+    hours_old: Optional[int] = Query(None),
 ):
     """Export enriched leads to a downloadable CSV file."""
     try:
@@ -634,6 +643,12 @@ def export_leads_csv(
             query["site"] = site.lower()
         if status and status.lower() != "all":
             query["status"] = status.lower()
+
+        if hours_old and hours_old > 0:
+            time_cutoff = datetime.utcnow() - timedelta(hours=hours_old)
+            if "$and" not in query:
+                query["$and"] = []
+            query["$and"].append({"created_at": {"$gte": time_cutoff}})
 
         if company_size and company_size.lower() != "all":
             c_size = company_size.lower().strip()
