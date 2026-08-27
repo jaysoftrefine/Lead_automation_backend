@@ -105,6 +105,7 @@ class RunPipelineRequest(BaseModel):
     model: Optional[str] = Field(None, example="gemini-2.5-flash")
     min_score: int = Field(30, ge=0, le=100)
     hours_old: int = Field(72, ge=0)
+    is_remote: bool = Field(True, description="Filter strictly for Remote positions within target location")
     skip_existing: bool = Field(True, description="Skip jobs that already exist in database")
 
 
@@ -142,8 +143,9 @@ def _execute_pipeline_task(req: RunPipelineRequest):
     target_size = req.company_size or "small"
     detected_job_type, effective_search_term = detect_job_type_filter(req.search_term, explicit_job_type=req.job_type)
     
+    remote_tag = " [REMOTE ONLY]" if req.is_remote else ""
     pipeline_state.add_log(
-        f"🎯 GOAL: Continuously scrape & evaluate until {target_goal} QUALIFIED leads are found (Size: {target_size.upper()} [Max 50], Job Type: {str(detected_job_type or 'all').upper()}, Min Score: {req.min_score})",
+        f"🎯 GOAL: Continuously scrape & evaluate until {target_goal} QUALIFIED leads are found (Location: '{req.location}'{remote_tag}, Size: {target_size.upper()} [Max 50], Job Type: {str(detected_job_type or 'all').upper()}, Min Score: {req.min_score})",
         "info"
     )
     pipeline_state.add_log(f"Target platforms: {', '.join(req.sites)} in '{req.location}'", "info")
@@ -170,22 +172,26 @@ def _execute_pipeline_task(req: RunPipelineRequest):
         # Scrape a sufficiently wide pool of raw candidate listings to satisfy the qualified goal
         raw_to_fetch = min(max(target_goal * 3, 20), 80)
         
-        # 1. Scrape Job Boards (JobSpy)
-        job_board_sites = [s for s in req.sites if "post" not in s.lower()] or ["linkedin", "naukri"]
-        pipeline_state.add_log(f"📡 [1/2] Scraping candidate jobs from {', '.join(job_board_sites)}...", "info")
+        # 1. Scrape Job Boards (JobSpy) - ONLY if job board platforms are selected
+        job_board_sites = [s for s in req.sites if "post" not in s.lower()]
+        raw_postings = []
+        if job_board_sites:
+            pipeline_state.add_log(f"📡 [1/2] Scraping candidate jobs from {', '.join(job_board_sites)} in '{req.location}' (Remote: {req.is_remote})...", "info")
+            raw_postings = orchestrator.scraper.scrape(
+                search_term=effective_search_term,
+                location=req.location,
+                results_wanted=raw_to_fetch,
+                hours_old=req.hours_old,
+                sites=job_board_sites,
+                job_type=detected_job_type,
+                is_remote=req.is_remote,
+            )
+        else:
+            pipeline_state.add_log("ℹ️ Structured Job Boards unchecked (Posts Only mode).", "info")
 
-        raw_postings = orchestrator.scraper.scrape(
-            search_term=effective_search_term,
-            location=req.location,
-            results_wanted=raw_to_fetch,
-            hours_old=req.hours_old,
-            sites=job_board_sites,
-            job_type=detected_job_type,
-        )
-
-        # 2. Scrape LinkedIn Organic Feed Posts (linkedin-api)
+        # 2. Scrape LinkedIn Organic Feed Posts
         feed_posts = []
-        if any("post" in s.lower() for s in req.sites) or (settings.linkedin_email and settings.linkedin_password) or settings.linkedin_li_at_cookie:
+        if any("post" in s.lower() for s in req.sites):
             try:
                 from scraper.linkedin_feed_scraper import linkedin_feed_scraper
                 if linkedin_feed_scraper.is_configured():
@@ -198,7 +204,7 @@ def _execute_pipeline_task(req: RunPipelineRequest):
                     if feed_posts:
                         pipeline_state.add_log(f"📥 Discovered {len(feed_posts)} organic LinkedIn hiring posts!", "success")
                 else:
-                    pipeline_state.add_log("ℹ️ Add LINKEDIN_EMAIL & LINKEDIN_PASSWORD to .env to scrape private LinkedIn feed posts.", "info")
+                    pipeline_state.add_log("ℹ️ LinkedIn credentials not fully initialized. Paste specific post URLs into Tab 3 for instant scraping.", "info")
             except Exception as feed_err:
                 logger.warning(f"LinkedIn feed post scraping note: {feed_err}")
 

@@ -151,10 +151,16 @@
                 </div>
 
                 <div class="form-group flex-1">
-                  <label for="search-location">Location / Remote</label>
+                  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem;">
+                    <label for="search-location" style="margin: 0;">Target Country / Market</label>
+                    <label class="toggle-switch-compact" style="display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.76rem; font-weight: 700; color: #38bdf8; cursor: pointer;" title="Automatically search for Remote roles based in this country">
+                      <input type="checkbox" id="is-remote-only" checked style="accent-color: #38bdf8; width: 14px; height: 14px;">
+                      <span>⚡ Remote Only</span>
+                    </label>
+                  </div>
                   <div class="input-with-icon">
                     <i data-lucide="map-pin"></i>
-                    <input type="text" id="search-location" placeholder="e.g. Remote, San Francisco, India" value="Remote">
+                    <input type="text" id="search-location" placeholder="e.g. UK, India, United States, Germany" value="United Kingdom">
                   </div>
                 </div>
               </div>

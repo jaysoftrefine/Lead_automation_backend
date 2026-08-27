@@ -195,6 +195,8 @@ document.addEventListener("DOMContentLoaded", () => {
     progressCountLabel.innerText = "0 / ?";
     progressJobLabel.innerText = `Connecting to ${checkedSites.join(", ")} and scraping '${searchTerm}' (Target: ${companySize.toUpperCase()} [Max 50], ${jobType.toUpperCase()}, ${hoursOld > 0 ? (hoursOld + 'h') : 'All dates'})...`;
 
+    const isRemote = document.getElementById("is-remote-only") ? document.getElementById("is-remote-only").checked : true;
+
     try {
       const res = await fetch(`${API_BASE}/api/pipeline/run`, {
         method: "POST",
@@ -202,6 +204,7 @@ document.addEventListener("DOMContentLoaded", () => {
         body: JSON.stringify({
           search_term: searchTerm,
           location: location,
+          is_remote: isRemote,
           company_size: companySize,
           job_type: jobType,
           hours_old: hoursOld,

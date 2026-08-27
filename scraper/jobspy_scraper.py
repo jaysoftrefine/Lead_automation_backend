@@ -29,6 +29,26 @@ except ImportError:
     scrape_jobs = None
 
 
+def map_country_for_indeed(location_str: Optional[str]) -> str:
+    """Maps a user location string to a JobSpy-supported country code."""
+    loc = (location_str or "").lower().strip()
+    if any(k in loc for k in ["uk", "united kingdom", "london", "england", "scotland"]):
+        return "UK"
+    if any(k in loc for k in ["india", "bangalore", "mumbai", "delhi", "hyderabad", "pune"]):
+        return "India"
+    if any(k in loc for k in ["canada", "toronto", "vancouver"]):
+        return "Canada"
+    if any(k in loc for k in ["germany", "berlin", "munich", "deutschland"]):
+        return "Germany"
+    if any(k in loc for k in ["australia", "sydney", "melbourne"]):
+        return "Australia"
+    if any(k in loc for k in ["france", "paris"]):
+        return "France"
+    if any(k in loc for k in ["netherlands", "amsterdam", "holland"]):
+        return "Netherlands"
+    return "USA"
+
+
 class JobSpyScraper(BaseScraper):
     """
     Scraper implementation leveraging python-jobspy library.
@@ -41,34 +61,40 @@ class JobSpyScraper(BaseScraper):
     def scrape(
         self,
         search_term: str,
-        location: Optional[str] = "Remote",
+        location: Optional[str] = "United Kingdom",
         results_wanted: int = 20,
         hours_old: Optional[int] = 72,
         sites: Optional[List[str]] = None,
         job_type: Optional[str] = None,
-        country_indeed: str = "USA",
+        is_remote: bool = True,
+        country_indeed: Optional[str] = None,
         **kwargs
     ) -> List[RawJobPosting]:
         """
         Scrape jobs across specified platforms using python-jobspy.
+        Supports filtering for Remote jobs based in a specific country.
         """
         if scrape_jobs is None:
             raise ScraperException("python-jobspy library is not installed. Please install requirements.txt")
 
         target_sites = sites or ["linkedin", "naukri"]
+        resolved_country = country_indeed or map_country_for_indeed(location)
+        effective_search_term = f"{search_term} remote" if is_remote and "remote" not in search_term.lower() else search_term
+
         logger.info(
-            f"Initiating JobSpy scrape for '{search_term}' | Location: '{location}' | Job Type: {job_type or 'All'} | Sites: {target_sites} | Results wanted: {results_wanted}"
+            f"Initiating JobSpy scrape for '{effective_search_term}' | Location/Country: '{location}' ({resolved_country}) | Remote Only: {is_remote} | Sites: {target_sites}"
         )
 
         try:
             # Build scraping kwargs
             scrape_kwargs = {
                 "site_name": target_sites,
-                "search_term": search_term,
+                "search_term": effective_search_term,
                 "location": location or "",
                 "results_wanted": results_wanted,
                 "hours_old": hours_old,
-                "country_indeed": country_indeed,
+                "is_remote": is_remote,
+                "country_indeed": resolved_country,
                 "proxies": self.proxies,
                 **kwargs
             }
