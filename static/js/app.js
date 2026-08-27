@@ -296,8 +296,20 @@ document.addEventListener("DOMContentLoaded", () => {
           setPipelineUIState(false);
           clearInterval(pipelinePollingInterval);
           pipelinePollingInterval = null;
-          progressJobLabel.innerText = data.status === "completed" ? "Pipeline complete! Ready for next search." : `Pipeline halted: ${data.error_message || 'Error'}`;
+
+          if (data.status === "completed") {
+            const total = data.total_count || data.processed_count || 10;
+            progressFill.style.width = "100%";
+            progressFill.style.background = "linear-gradient(90deg, #10b981, #06b6d4)";
+            progressCountLabel.innerText = `${total} / ${total} (100%)`;
+            const savedCount = (data.metrics && data.metrics.saved_to_db !== undefined) ? data.metrics.saved_to_db : "";
+            progressJobLabel.innerHTML = `✅ <strong>Pipeline Finished!</strong> Processed all ${total} listings. <a href="#" onclick="document.querySelector('[data-tab=tab-leads]').click(); return false;" style="color:#38bdf8; text-decoration:underline; font-weight:700; margin-left:8px;">View in Leads Explorer (${savedCount} saved) &rarr;</a>`;
+          } else {
+            progressJobLabel.innerText = `Pipeline halted: ${data.error_message || 'Error occurred'}`;
+          }
+
           fetchStats(); // Update counters
+          fetchLeads(); // Refresh leads in database
         }
       }
 
