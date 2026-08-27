@@ -167,6 +167,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const companySize = document.getElementById("company-size") ? document.getElementById("company-size").value : "small";
     const jobType = document.getElementById("job-type") ? document.getElementById("job-type").value : "all";
     const hoursOld = document.getElementById("hours-old") ? parseInt(document.getElementById("hours-old").value, 10) : 72;
+    const skipExisting = document.getElementById("skip-existing") ? document.getElementById("skip-existing").checked : true;
     const limit = parseInt(document.getElementById("search-limit").value, 10);
     const minScore = parseInt(document.getElementById("min-score").value, 10);
     const provider = document.getElementById("pipeline-provider").value;
@@ -204,6 +205,7 @@ document.addEventListener("DOMContentLoaded", () => {
           company_size: companySize,
           job_type: jobType,
           hours_old: hoursOld,
+          skip_existing: skipExisting,
           sites: checkedSites,
           limit: limit,
           min_score: minScore,
@@ -691,6 +693,21 @@ document.addEventListener("DOMContentLoaded", () => {
     showToast("Dashboard refreshed", "success");
   });
   btnRefreshLeads.addEventListener("click", fetchLeads);
+  const btnClearDbUi = document.getElementById("btn-clear-db-ui");
+  if (btnClearDbUi) {
+    btnClearDbUi.addEventListener("click", async () => {
+      if (!confirm("Are you sure you want to clear all leads from MongoDB? This will allow you to re-scrape from scratch.")) return;
+      try {
+        const res = await fetch(`${API_BASE}/api/database/clear`, { method: "POST" });
+        const data = await res.json();
+        showToast(data.message || "Database cleared successfully!", "success");
+        fetchStats();
+        fetchLeads();
+      } catch (err) {
+        showToast("Failed to clear database: " + err.message, "error");
+      }
+    });
+  }
   leadSearchInput.addEventListener("input", debounce(fetchLeads, 400));
   if (filterCompanySize) filterCompanySize.addEventListener("change", fetchLeads);
   const filterJobTypeEl = document.getElementById("filter-job-type");

@@ -104,7 +104,8 @@ class RunPipelineRequest(BaseModel):
     provider: Optional[str] = Field(None, example="gemini")
     model: Optional[str] = Field(None, example="gemini-2.5-flash")
     min_score: int = Field(30, ge=0, le=100)
-    hours_old: int = Field(72, ge=1)
+    hours_old: int = Field(72, ge=0)
+    skip_existing: bool = Field(True, description="Skip jobs that already exist in database")
 
 
 class TestEnrichmentRequest(BaseModel):
@@ -212,10 +213,10 @@ def _execute_pipeline_task(req: RunPipelineRequest):
             # Save raw job
             mongo_manager.save_raw_job(job)
 
-            # Check duplicate
-            if mongo_manager.job_exists(job.job_url):
+            # Check duplicate (if skip_existing is True)
+            if req.skip_existing and mongo_manager.job_exists(job.job_url):
                 pipeline_state.add_log(
-                    f"⏭️ SKIPPED (Duplicate): '{job.company}' - already exists in MongoDB database.",
+                    f"⏭️ SKIPPED (Duplicate): '{job.company}' - already exists in MongoDB database. (Uncheck 'Skip Duplicates' to force re-enrich)",
                     "warning"
                 )
                 metrics.already_existing += 1
@@ -277,7 +278,7 @@ def _execute_pipeline_task(req: RunPipelineRequest):
         # Log final summary
         pipeline_state.add_log("=" * 60, "info")
         pipeline_state.add_log(
-            f"📊 SUMMARY: Scraped: {metrics.total_scraped} | Unique Companies: {metrics.unique_companies_count} | Target Size: {target_size.upper()} (Max 50) | Processed: {metrics.processed_by_agent} | Qualified Leads Saved: {metrics.saved_to_db} | Contacts Found: {metrics.total_contacts_discovered}",
+            f"📊 SUMMARY: Scraped: {metrics.total_scraped} | Unique Companies: {metrics.unique_companies_count} | Target Size: {target_size.upper()} (Max 50) | Already in DB: {metrics.already_existing} | Processed: {metrics.processed_by_agent} | Qualified Leads Saved: {metrics.saved_to_db} | Contacts Found: {metrics.total_contacts_discovered}",
             "success"
         )
         pipeline_state.finish(metrics=metrics)
@@ -285,9 +286,27 @@ def _execute_pipeline_task(req: RunPipelineRequest):
     except Exception as e:
         logger.exception("Pipeline execution failed")
         pipeline_state.finish(error=str(e))
+    finally:
+        pipeline_state.is_running = False
 
 
 # --- API Routes ---
+
+@router.post("/database/clear")
+def clear_database_api():
+    """Clear all enriched leads and raw jobs from MongoDB."""
+    try:
+        mongo_manager.connect()
+        res = mongo_manager.clear_database()
+        return {
+            "success": True,
+            "leads_deleted": res.get("leads_deleted", 0),
+            "raw_jobs_deleted": res.get("raw_jobs_deleted", 0),
+            "message": f"Database cleared: {res.get('leads_deleted', 0)} leads deleted.",
+        }
+    except Exception as e:
+        logger.error(f"Error clearing database: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/stats")
 def get_stats():

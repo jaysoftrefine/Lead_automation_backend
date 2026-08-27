@@ -235,7 +235,7 @@
                 </div>
               </div>
 
-              <div class="form-actions">
+              <div class="form-actions" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:1rem;">
                 <button type="submit" id="btn-start-pipeline" class="btn btn-primary btn-large">
                   <i data-lucide="play"></i>
                   <span>Start Autonomous Lead Pipeline</span>
@@ -244,6 +244,10 @@
                   <i data-lucide="square"></i>
                   <span>Stop Pipeline</span>
                 </button>
+                <label class="checkbox-chip" title="Uncheck to re-research jobs that already exist in database">
+                  <input type="checkbox" id="skip-existing" checked>
+                  <span class="chip-content"><i data-lucide="shield-check"></i> Skip Already-Saved Duplicates</span>
+                </label>
               </div>
             </form>
           </div>
@@ -343,12 +347,16 @@
                 <input type="number" id="filter-min-score" min="0" max="100" value="0" class="score-num-input">
               </div>
 
-              <!-- Export Buttons -->
+              <!-- Export & DB Actions -->
               <div class="export-actions">
                 <a href="/api/export/csv" id="btn-export-csv" class="btn btn-secondary btn-sm" download>
                   <i data-lucide="download"></i>
                   <span>Export CSV</span>
                 </a>
+                <button id="btn-clear-db-ui" class="btn btn-secondary btn-sm" style="color: #fb7185; border-color: rgba(244, 63, 94, 0.4);" title="Clear all saved leads from MongoDB">
+                  <i data-lucide="trash-2"></i>
+                  <span>Clear DB</span>
+                </button>
                 <button id="btn-refresh-leads" class="btn btn-icon-ghost" title="Reload leads">
                   <i data-lucide="refresh-cw"></i>
                 </button>
