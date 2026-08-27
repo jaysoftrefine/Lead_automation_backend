@@ -118,6 +118,18 @@ class TestEnrichmentRequest(BaseModel):
     model: Optional[str] = Field(None)
 
 
+class ScrapeLinkedInPostRequest(BaseModel):
+    url: Optional[str] = Field(None, example="https://www.linkedin.com/posts/...")
+    raw_text: Optional[str] = Field(None, example="We are hiring a freelance AI engineer...")
+    company: Optional[str] = Field(None, example="StartupX")
+    title: Optional[str] = Field(None, example="Senior AI Engineer")
+    target_company_size: str = Field("small", example="small")
+    target_job_type: str = Field("contract", example="contract")
+    provider: Optional[str] = Field(None)
+    model: Optional[str] = Field(None)
+    save_to_db: bool = Field(True)
+
+
 class UpdateLeadStatusRequest(BaseModel):
     job_url: str
     status: str = Field(..., example="qualified")  # new, contacted, qualified, rejected, archived
@@ -601,6 +613,55 @@ def stop_pipeline():
     pipeline_state._stop_requested = True
     pipeline_state.add_log("Stop request received, winding down...", "warning")
     return {"success": True, "message": "Stop requested."}
+
+
+@router.post("/scrape/linkedin-post")
+def scrape_linkedin_post_endpoint(req: ScrapeLinkedInPostRequest):
+    """Scrapes a LinkedIn post/job URL or raw text, extracts details, enriches with leadership contacts & verified emails, and saves to MongoDB."""
+    try:
+        from scraper.linkedin_post_scraper import linkedin_post_scraper
+        
+        parsed = linkedin_post_scraper.scrape_url_or_text(
+            url=req.url,
+            raw_text=req.raw_text,
+            company_hint=req.company,
+            title_hint=req.title,
+        )
+
+        job_posting = RawJobPosting(
+            title=parsed["title"],
+            company=parsed["company"],
+            location=parsed["location"],
+            job_url=parsed["job_url"],
+            site=parsed["site"],
+            description=parsed["description"],
+            job_type=req.target_job_type if req.target_job_type != "all" else "Contract",
+        )
+
+        agent = LeadEnrichmentAgent(
+            provider_name=req.provider or settings.default_llm_provider,
+            model_name=req.model,
+        )
+
+        enriched_lead: EnrichedLead = agent.enrich_job(
+            job_posting,
+            target_company_size=req.target_company_size,
+            target_job_type=req.target_job_type,
+        )
+
+        if req.save_to_db:
+            mongo_manager.connect()
+            mongo_manager.upsert_enriched_lead(enriched_lead)
+
+        return {
+            "success": True,
+            "parsed_post": parsed,
+            "lead": enriched_lead.model_dump(mode="json"),
+            "saved_to_db": req.save_to_db,
+        }
+    except Exception as e:
+        logger.error(f"Error scraping LinkedIn post: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/pipeline/test-enrichment")

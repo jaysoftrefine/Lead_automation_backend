@@ -611,31 +611,45 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  // --- Instant Agent Sandbox ---
+  // --- Direct LinkedIn Post & Single Job Scraper ---
   instantForm.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const company = document.getElementById("lab-company").value.trim();
-    const title = document.getElementById("lab-title").value.trim();
-    const desc = document.getElementById("lab-description").value.trim();
+    const url = document.getElementById("lab-url") ? document.getElementById("lab-url").value.trim() : "";
+    const company = document.getElementById("lab-company") ? document.getElementById("lab-company").value.trim() : "";
+    const title = document.getElementById("lab-title") ? document.getElementById("lab-title").value.trim() : "";
+    const size = document.getElementById("lab-size") ? document.getElementById("lab-size").value : "small";
+    const jobType = document.getElementById("lab-type") ? document.getElementById("lab-type").value : "contract";
+    const desc = document.getElementById("lab-description") ? document.getElementById("lab-description").value.trim() : "";
+    const saveToDb = document.getElementById("lab-save-db") ? document.getElementById("lab-save-db").checked : true;
+
+    if (!url && !company && !desc) {
+      showToast("Please provide a LinkedIn URL, company name, or post text.", "error");
+      return;
+    }
 
     labResultPlaceholder.style.display = "none";
     labLoading.style.display = "flex";
     labResultContent.style.display = "none";
     btnRunLab.disabled = true;
+    btnRunLab.innerHTML = `<div class="spinner" style="width: 16px; height: 16px; border-width: 2px;"></div> Scrapiing & Researching...`;
 
     try {
-      const res = await fetch(`${API_BASE}/api/pipeline/test-enrichment`, {
+      const res = await fetch(`${API_BASE}/api/scrape/linkedin-post`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          company: company,
-          title: title,
-          job_description: desc,
+          url: url || null,
+          raw_text: desc || null,
+          company: company || null,
+          title: title || null,
+          target_company_size: size,
+          target_job_type: jobType,
+          save_to_db: saveToDb,
         }),
       });
 
       const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || "Agent research failed");
+      if (!res.ok) throw new Error(data.detail || "Agent research on LinkedIn post failed");
 
       labLoading.style.display = "none";
       labResultContent.style.display = "block";
@@ -645,37 +659,55 @@ document.addEventListener("DOMContentLoaded", () => {
 
       labResultContent.innerHTML = `
         <div style="background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.3); border-radius: var(--radius-md); padding: 1rem; margin-bottom: 1rem;">
-          <h3 style="color: #34d399; font-size: 1rem; margin-bottom: 0.25rem;">✓ Research Completed (Relevance Score: ${lead.relevance_score}/100)</h3>
-          <p style="font-size: 0.85rem; color: #cbd5e1;">${escapeHtml(lead.lead_summary || lead.company_summary || '')}</p>
+          <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem; margin-bottom:0.4rem;">
+            <h3 style="color: #34d399; font-size: 1rem; margin: 0;">✓ Scraped: ${escapeHtml(lead.company)} - ${escapeHtml(lead.title)}</h3>
+            <span class="lead-score-pill score-high">${lead.relevance_score}/100 Score</span>
+          </div>
+          <p style="font-size: 0.85rem; color: #cbd5e1; margin-bottom: 0.5rem;">${escapeHtml(lead.lead_summary || lead.company_summary || '')}</p>
+          <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+            <span class="lead-meta-pill"><i data-lucide="building-2"></i> ${escapeHtml(lead.company_size || 'Small')}</span>
+            <span class="lead-meta-pill"><i data-lucide="briefcase"></i> ${escapeHtml(lead.job_type || 'Contract')}</span>
+            ${lead.job_url ? `<a href="${escapeHtml(lead.job_url)}" target="_blank" class="lead-meta-pill platform-link-pill"><i data-lucide="external-link"></i> Original Post Link</a>` : ''}
+          </div>
         </div>
 
         <div style="margin-bottom: 1rem;">
-          <h4 style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.5rem;">DISCOVERED DECISION MAKERS (${contacts.length})</h4>
+          <h4 style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.5rem;">KEY LEADERSHIP & VERIFIED EMAILS (${contacts.length})</h4>
           ${contacts.map(c => `
             <div class="contact-person-card" style="margin-bottom: 0.4rem;">
               <div>
-                <strong>${escapeHtml(c.name || 'Decision Maker')}</strong> - <span class="text-muted">${escapeHtml(c.role || '')}</span>
-                ${c.email ? `<div style="color:var(--accent-cyan); font-size: 0.8rem;">✉ ${escapeHtml(c.email)}</div>` : ''}
+                <strong>${escapeHtml(c.name || 'Leadership Contact')}</strong> - <span style="color:#e2e8f0;">${escapeHtml(c.role || 'Executive')}</span>
+                ${c.email ? `
+                  <div style="display:flex; align-items:center; gap:6px; margin-top:2px;">
+                    <span style="color:var(--accent-cyan); font-size: 0.8rem; font-weight:500;">✉ ${escapeHtml(c.email)}</span>
+                    ${c.is_verified ? `<span class="badge-verified-email">✓ Verified</span>` : ''}
+                  </div>` : ''}
               </div>
-              ${c.linkedin_url ? `<a href="${c.linkedin_url}" target="_blank" class="btn btn-secondary btn-sm">LinkedIn</a>` : ''}
+              <div style="display:flex; gap:6px;">
+                ${c.email ? `<button class="btn-copy-email" onclick="window.copyToClipboard('${c.email}', this)"><i data-lucide="copy" style="width:12px;height:12px;"></i> Copy</button>` : ''}
+                ${c.linkedin_url ? `<a href="${c.linkedin_url}" target="_blank" class="btn btn-secondary btn-sm" title="View LinkedIn Profile">LinkedIn</a>` : ''}
+              </div>
             </div>
-          `).join('') || '<p class="text-muted">No individual direct contacts found.</p>'}
+          `).join('') || '<p class="text-muted">No individual direct contacts found. Domain: ' + escapeHtml(lead.company_domain || 'N/A') + '</p>'}
         </div>
 
         <div>
-          <h4 style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.5rem;">AGENT THINKING PROCESS</h4>
+          <h4 style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.5rem;">AGENT THINKING PROCESS & SEARCH EVIDENCE</h4>
           <div class="reasoning-box">${escapeHtml(lead.agent_thinking_process || 'Agent reasoning completed.')}</div>
         </div>
       `;
 
-      showToast("Instant research completed and lead saved to DB!", "success");
-      fetchStats();
+      if (saveToDb) {
+        showToast(`Saved ${lead.company} to Leads Explorer!`, "success");
+        fetchStats();
+        fetchLeads();
+      }
     } catch (err) {
       labLoading.style.display = "none";
-      labResultPlaceholder.style.display = "flex";
       showToast(err.message, "error");
     } finally {
       btnRunLab.disabled = false;
+      btnRunLab.innerHTML = `<i data-lucide="sparkles"></i><span>Scrape & Enrich LinkedIn Post</span>`;
       if (window.lucide) lucide.createIcons();
     }
   });

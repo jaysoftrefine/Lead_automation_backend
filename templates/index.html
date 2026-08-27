@@ -384,45 +384,82 @@
         </div>
       </section>
 
-      <!-- TAB 3: Instant Agent Lab (Direct Single-Job Test) -->
+      <!-- TAB 3: Direct LinkedIn Post & Job URL Scraper / Lab -->
       <section id="tab-instant-research" class="tab-panel">
         <div class="lab-grid">
           <!-- Input Card -->
           <div class="glass-card lab-card">
             <div class="card-header">
               <div class="card-title-group">
-                <i data-lucide="flask-conical" class="text-violet"></i>
-                <h2>Instant Research Sandbox</h2>
+                <i data-lucide="linkedin" class="text-violet" style="color: #38bdf8;"></i>
+                <h2>LinkedIn Post & Single Job Scraper</h2>
               </div>
-              <p class="card-subtitle">Test the Autonomous Thinking Agent + Tavily Search on any company & title on demand without scraping.</p>
+              <p class="card-subtitle">Scrape any LinkedIn hiring post URL, LinkedIn job link, or paste a hiring update to extract decision-makers, verified emails, and company intel.</p>
             </div>
 
             <form id="instant-research-form" class="instant-form">
               <div class="form-group">
-                <label for="lab-company">Target Company Name <span class="req">*</span></label>
+                <label for="lab-url">LinkedIn Post URL or Job URL <span class="text-highlight">(Paste URL)</span></label>
                 <div class="input-with-icon">
-                  <i data-lucide="building-2"></i>
-                  <input type="text" id="lab-company" placeholder="e.g. Stripe, OpenAI, Anthropic, Datadog" required value="Stripe">
+                  <i data-lucide="link"></i>
+                  <input type="url" id="lab-url" placeholder="https://www.linkedin.com/posts/... or https://www.linkedin.com/jobs/view/...">
+                </div>
+              </div>
+
+              <div class="form-row">
+                <div class="form-group flex-1">
+                  <label for="lab-company">Company Name (Optional if URL provided)</label>
+                  <div class="input-with-icon">
+                    <i data-lucide="building-2"></i>
+                    <input type="text" id="lab-company" placeholder="e.g. Scitron, Stripe, OpenAI">
+                  </div>
+                </div>
+
+                <div class="form-group flex-1">
+                  <label for="lab-title">Target Role / Title (Optional)</label>
+                  <div class="input-with-icon">
+                    <i data-lucide="tag"></i>
+                    <input type="text" id="lab-title" placeholder="e.g. Freelance AI ML Engineer">
+                  </div>
+                </div>
+              </div>
+
+              <div class="form-row">
+                <div class="form-group flex-1">
+                  <label for="lab-size">Target Size</label>
+                  <select id="lab-size" class="custom-select">
+                    <option value="small" selected>🌱 Small (1-50 employees)</option>
+                    <option value="medium">🏢 Medium (51-500)</option>
+                    <option value="large">🏛️ Large (500+)</option>
+                    <option value="all">🌐 All Sizes</option>
+                  </select>
+                </div>
+
+                <div class="form-group flex-1">
+                  <label for="lab-type">Job Type</label>
+                  <select id="lab-type" class="custom-select">
+                    <option value="contract" selected>🤝 Freelance / Contract</option>
+                    <option value="fulltime">💼 Full-time</option>
+                    <option value="all">🌐 All Types</option>
+                  </select>
                 </div>
               </div>
 
               <div class="form-group">
-                <label for="lab-title">Role / Opportunity Title <span class="req">*</span></label>
-                <div class="input-with-icon">
-                  <i data-lucide="tag"></i>
-                  <input type="text" id="lab-title" placeholder="e.g. Senior Infrastructure Engineer" required value="Senior Infrastructure Engineer">
-                </div>
+                <label for="lab-description">Paste LinkedIn Post Text / Requirements (If copying text directly)</label>
+                <textarea id="lab-description" rows="3" placeholder="e.g. 'We are hiring a freelance LLM Engineer for our 15-person startup! DM me or email...'"></textarea>
               </div>
 
-              <div class="form-group">
-                <label for="lab-description">Job Description / Requirements (Optional Context)</label>
-                <textarea id="lab-description" rows="3" placeholder="Paste any job requirements, tech stack mentions, or context for the agent..."></textarea>
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-top:0.5rem; flex-wrap:wrap; gap:0.5rem;">
+                <button type="submit" id="btn-run-lab" class="btn btn-primary btn-large">
+                  <i data-lucide="sparkles"></i>
+                  <span>Scrape & Enrich LinkedIn Post</span>
+                </button>
+                <label class="checkbox-chip">
+                  <input type="checkbox" id="lab-save-db" checked>
+                  <span class="chip-content"><i data-lucide="save"></i> Save to Leads Explorer</span>
+                </label>
               </div>
-
-              <button type="submit" id="btn-run-lab" class="btn btn-primary btn-large">
-                <i data-lucide="sparkles"></i>
-                <span>Execute Agent Research Loop</span>
-              </button>
             </form>
           </div>
 
