@@ -87,8 +87,26 @@ class JobSpyScraper(BaseScraper):
             return postings
 
         except Exception as e:
-            logger.error(f"Error occurred during JobSpy scraping: {e}")
-            raise ScraperException(f"JobSpy scrape failed: {e}") from e
+            logger.warning(f"Batch JobSpy scrape failed ({e}). Attempting resilient site-by-site fallback...")
+            collected_dfs = []
+            for single_site in target_sites:
+                try:
+                    single_kwargs = dict(scrape_kwargs)
+                    single_kwargs["site_name"] = [single_site]
+                    single_df = scrape_jobs(**single_kwargs)
+                    if single_df is not None and not single_df.empty:
+                        collected_dfs.append(single_df)
+                        logger.info(f"Fallback scrape succeeded for site '{single_site}': {len(single_df)} jobs.")
+                except Exception as site_err:
+                    logger.warning(f"Scraping single site '{single_site}' failed: {site_err}")
+
+            if collected_dfs:
+                import pandas as pd
+                combined_df = pd.concat(collected_dfs, ignore_index=True)
+                return self._parse_dataframe(combined_df)
+
+            logger.error(f"All scrapers failed for query '{search_term}': {e}")
+            return []
 
     def _parse_dataframe(self, df) -> List[RawJobPosting]:
         """Converts JobSpy pandas DataFrame into a clean list of RawJobPosting objects."""

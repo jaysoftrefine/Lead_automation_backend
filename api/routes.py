@@ -573,8 +573,13 @@ def delete_lead(url: str = Query(..., description="Job URL of the lead")):
 @router.post("/pipeline/run")
 def trigger_pipeline(req: RunPipelineRequest, background_tasks: BackgroundTasks):
     """Trigger the scraping and enrichment pipeline asynchronously."""
+    # Safety: Auto-clear stale running state if > 3 minutes
+    if pipeline_state.is_running and pipeline_state.started_at and (time.time() - pipeline_state.started_at) > 180:
+        logger.warning("Auto-clearing stale running pipeline state.")
+        pipeline_state.is_running = False
+
     if pipeline_state.is_running:
-        raise HTTPException(status_code=409, detail="A pipeline task is already currently running.")
+        raise HTTPException(status_code=409, detail="A pipeline task is already currently running. Click Stop or wait a moment.")
 
     thread = threading.Thread(target=_execute_pipeline_task, args=(req,), daemon=True)
     thread.start()
