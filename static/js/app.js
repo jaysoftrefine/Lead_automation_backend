@@ -279,17 +279,17 @@ document.addEventListener("DOMContentLoaded", () => {
       // Update Progress UI
       if (data.is_running) {
         setPipelineUIState(true);
-        const total = data.total_count || 1;
-        const current = data.processed_count || 0;
-        const pct = Math.min(100, Math.round((current / total) * 100));
+        const totalGoal = data.total_count || 10;
+        const savedSoFar = data.processed_count || (data.metrics ? data.metrics.saved_to_db : 0);
+        const pct = Math.min(100, Math.round((savedSoFar / totalGoal) * 100));
 
         progressFill.style.width = `${pct}%`;
-        progressCountLabel.innerText = `${current} / ${data.total_count || '?'}`;
+        progressCountLabel.innerText = `${savedSoFar} / ${totalGoal} Qualified Leads`;
 
         if (data.status === "scraping") {
-          progressJobLabel.innerText = `Scraping job listings from selected platforms...`;
+          progressJobLabel.innerText = `Scraping candidates across platforms to find ${totalGoal} qualified leads...`;
         } else if (data.status === "enriching" && data.current_company) {
-          progressJobLabel.innerText = `Analyzing: ${data.current_job_title} @ ${data.current_company}`;
+          progressJobLabel.innerText = `[${savedSoFar}/${totalGoal} Found] Qualifying: ${data.current_job_title} @ ${data.current_company}`;
         }
       } else {
         if (data.status === "completed" || data.status === "error") {
@@ -298,12 +298,12 @@ document.addEventListener("DOMContentLoaded", () => {
           pipelinePollingInterval = null;
 
           if (data.status === "completed") {
-            const total = data.total_count || data.processed_count || 10;
+            const savedTotal = (data.metrics && data.metrics.saved_to_db !== undefined) ? data.metrics.saved_to_db : (data.processed_count || 0);
+            const goal = data.total_count || savedTotal || 10;
             progressFill.style.width = "100%";
             progressFill.style.background = "linear-gradient(90deg, #10b981, #06b6d4)";
-            progressCountLabel.innerText = `${total} / ${total} (100%)`;
-            const savedCount = (data.metrics && data.metrics.saved_to_db !== undefined) ? data.metrics.saved_to_db : "";
-            progressJobLabel.innerHTML = `✅ <strong>Pipeline Finished!</strong> Processed all ${total} listings. <a href="#" onclick="document.querySelector('[data-tab=tab-leads]').click(); return false;" style="color:#38bdf8; text-decoration:underline; font-weight:700; margin-left:8px;">View in Leads Explorer (${savedCount} saved) &rarr;</a>`;
+            progressCountLabel.innerText = `${savedTotal} / ${goal} Qualified Leads`;
+            progressJobLabel.innerHTML = `✅ <strong>Goal Reached!</strong> Discovered ${savedTotal} qualified leads. <a href="#" onclick="document.querySelector('[data-tab=tab-leads]').click(); return false;" style="color:#38bdf8; text-decoration:underline; font-weight:700; margin-left:8px;">View in Leads Explorer (${savedTotal} saved) &rarr;</a>`;
           } else {
             progressJobLabel.innerText = `Pipeline halted: ${data.error_message || 'Error occurred'}`;
           }

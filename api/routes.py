@@ -138,14 +138,15 @@ class UpdateLeadStatusRequest(BaseModel):
 # --- Worker Function ---
 def _execute_pipeline_task(req: RunPipelineRequest):
     pipeline_state.reset()
+    target_goal = req.limit or 10  # Target number of qualified leads desired
     target_size = req.company_size or "small"
     detected_job_type, effective_search_term = detect_job_type_filter(req.search_term, explicit_job_type=req.job_type)
     
     pipeline_state.add_log(
-        f"Starting pipeline for '{req.search_term}' in '{req.location}' (Size Target: {target_size.upper()} [Max 50], Job Type: {str(detected_job_type or 'all').upper()})",
+        f"🎯 GOAL: Continuously scrape & evaluate until {target_goal} QUALIFIED leads are found (Size: {target_size.upper()} [Max 50], Job Type: {str(detected_job_type or 'all').upper()}, Min Score: {req.min_score})",
         "info"
     )
-    pipeline_state.add_log(f"Target platforms: {', '.join(req.sites)} (Limit: {req.limit})", "info")
+    pipeline_state.add_log(f"Target platforms: {', '.join(req.sites)} in '{req.location}'", "info")
 
     try:
         # Connect to DB
@@ -165,13 +166,15 @@ def _execute_pipeline_task(req: RunPipelineRequest):
         )
 
         pipeline_state.status = "scraping"
-        pipeline_state.add_log(f"📡 [1/2] Scraping job postings from {', '.join(req.sites)} (Job Type: {str(detected_job_type or 'all').upper()}, Location: '{req.location}')...", "info")
+        
+        # Scrape a sufficiently wide pool of raw candidate listings to satisfy the qualified goal
+        raw_to_fetch = min(max(target_goal * 3, 20), 80)
+        pipeline_state.add_log(f"📡 [1/2] Scraping initial candidate batch of {raw_to_fetch} jobs from {', '.join(req.sites)}...", "info")
 
-        # Scrape jobs
         raw_postings = orchestrator.scraper.scrape(
             search_term=effective_search_term,
             location=req.location,
-            results_wanted=req.limit,
+            results_wanted=raw_to_fetch,
             hours_old=req.hours_old,
             sites=req.sites,
             job_type=detected_job_type,
@@ -189,9 +192,9 @@ def _execute_pipeline_task(req: RunPipelineRequest):
             unique_companies=unique_comps,
         )
 
-        pipeline_state.total_count = len(raw_postings)
+        pipeline_state.total_count = target_goal
         pipeline_state.add_log(
-            f"📥 Fetched {len(raw_postings)} job postings across {len(unique_comps)} unique companies.",
+            f"📥 Fetched {len(raw_postings)} candidate postings across {len(unique_comps)} unique companies. Starting qualification loop...",
             "success"
         )
         if unique_comps:
@@ -272,14 +275,23 @@ def _execute_pipeline_task(req: RunPipelineRequest):
 
                 mongo_manager.upsert_enriched_lead(enriched_lead)
                 metrics.saved_to_db += 1
+                pipeline_state.processed_count = metrics.saved_to_db
                 contacts_found = len(enriched_lead.contacts)
                 metrics.total_contacts_discovered += contacts_found
 
-                contact_preview = ", ".join([f"{c.name or 'Recruiter'} ({c.email or 'Domain'})" for c in enriched_lead.contacts[:2]])
+                contact_preview = ", ".join([f"{c.name or 'Executive'} ({c.email or 'Domain'})" for c in enriched_lead.contacts[:2]])
                 pipeline_state.add_log(
-                    f"✅ QUALIFIED LEAD SAVED: '{job.company}' ({enriched_lead.company_size or 'Small'}) [{enriched_lead.job_type or 'Contract'}] | Score: {enriched_lead.relevance_score}/100 | Contacts ({contacts_found}): {contact_preview or 'Company Domain'}",
+                    f"✅ [{metrics.saved_to_db}/{target_goal} Target Qualified Leads] SAVED: '{job.company}' ({enriched_lead.company_size or 'Small'}) [{enriched_lead.job_type or 'Contract'}] | Score: {enriched_lead.relevance_score}/100 | Contacts ({contacts_found}): {contact_preview or 'Company Domain'}",
                     "success"
                 )
+
+                # Check if we have fulfilled the user's exact requested target count!
+                if metrics.saved_to_db >= target_goal:
+                    pipeline_state.add_log(
+                        f"🎉 TARGET REACHED: Successfully discovered and saved all {target_goal} qualified leads matching all your filter criteria!",
+                        "success"
+                    )
+                    break
 
             except Exception as item_err:
                 logger.error(f"Error enriching {job.job_url}: {item_err}")
@@ -290,7 +302,7 @@ def _execute_pipeline_task(req: RunPipelineRequest):
         # Log final summary
         pipeline_state.add_log("=" * 60, "info")
         pipeline_state.add_log(
-            f"📊 SUMMARY: Scraped: {metrics.total_scraped} | Unique Companies: {metrics.unique_companies_count} | Target Size: {target_size.upper()} (Max 50) | Already in DB: {metrics.already_existing} | Processed: {metrics.processed_by_agent} | Qualified Leads Saved: {metrics.saved_to_db} | Contacts Found: {metrics.total_contacts_discovered}",
+            f"📊 SUMMARY: Goal: {target_goal} Qualified Leads | Found & Saved: {metrics.saved_to_db} | Scraped: {metrics.total_scraped} | Processed: {metrics.processed_by_agent} | Rejected: {metrics.rejected_by_llm} | Contacts: {metrics.total_contacts_discovered}",
             "success"
         )
         pipeline_state.finish(metrics=metrics)
