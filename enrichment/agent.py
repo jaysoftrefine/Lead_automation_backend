@@ -361,8 +361,8 @@ Respond ONLY with a valid JSON object matching this schema:
 
     # --- Public API ---
 
-    def _verify_lead_contacts(self, contacts: List[ContactPerson]) -> List[ContactPerson]:
-        """Runs real-time SMTP and DNS MX verification on every discovered email."""
+    def _verify_lead_contacts(self, contacts: List[ContactPerson], company_domain: Optional[str] = None) -> List[ContactPerson]:
+        """Runs real-time SMTP and DNS MX verification on every discovered email and derives verified executive mail."""
         verified_contacts: List[ContactPerson] = []
         for contact in contacts:
             if contact.email:
@@ -372,12 +372,23 @@ Respond ONLY with a valid JSON object matching this schema:
                     contact.is_verified = True
                     contact.verification_status = "valid"
                     contact.verification_details = ver_res["reason"]
-                    contact.confidence_score = min(100, max(60, contact.confidence_score + ver_res.get("confidence_boost", 10)))
+                    contact.confidence_score = min(100, max(75, contact.confidence_score + ver_res.get("confidence_boost", 15)))
                     verified_contacts.append(contact)
                 else:
-                    logger.warning(f"❌ [Email Verifier] Filtered non-deliverable email: {contact.email} ({ver_res['reason']})")
-                    # If contact has a person name or LinkedIn profile, keep the person but remove the invalid email
-                    if contact.name or contact.linkedin_url or contact.phone:
+                    logger.warning(f"❌ [Email Verifier] Rejected non-deliverable email: {contact.email} ({ver_res['reason']})")
+                    # Try to recover a valid executive email permutation
+                    recovered = None
+                    if contact.name and company_domain:
+                        recovered = email_verifier.find_and_verify_executive_email(contact.name, company_domain, role=contact.role)
+
+                    if recovered and recovered.get("is_valid"):
+                        contact.email = recovered["email"]
+                        contact.is_verified = True
+                        contact.verification_status = "valid"
+                        contact.verification_details = f"Derived & Verified: {recovered['reason']}"
+                        contact.confidence_score = 85
+                        verified_contacts.append(contact)
+                    elif contact.name or contact.linkedin_url or contact.phone:
                         contact.email = None
                         contact.is_verified = False
                         contact.verification_status = "invalid"
@@ -385,6 +396,16 @@ Respond ONLY with a valid JSON object matching this schema:
                         contact.confidence_score = max(30, contact.confidence_score - 30)
                         verified_contacts.append(contact)
             else:
+                # No email provided by LLM - actively derive & verify executive email
+                if contact.name and company_domain:
+                    derived = email_verifier.find_and_verify_executive_email(contact.name, company_domain, role=contact.role)
+                    if derived and derived.get("is_valid"):
+                        contact.email = derived["email"]
+                        contact.is_verified = True
+                        contact.verification_status = "valid"
+                        contact.verification_details = f"Verified: {derived['reason']}"
+                        contact.confidence_score = 85
+                        logger.info(f"✨ [Email Discovery] Verified executive email: {contact.name} -> {contact.email}")
                 verified_contacts.append(contact)
 
         return verified_contacts
@@ -424,7 +445,7 @@ Respond ONLY with a valid JSON object matching this schema:
             structured: ExtractedLeadData = final_state.get("structured_lead") or self._robust_structured_extraction("", initial_state)
 
             # Real-time SMTP and DNS MX Verification of all contacts
-            validated_contacts = self._verify_lead_contacts(structured.contacts)
+            validated_contacts = self._verify_lead_contacts(structured.contacts, company_domain=structured.company_domain)
 
             # Construct EnrichedLead database entity
             enriched = EnrichedLead(

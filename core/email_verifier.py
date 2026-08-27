@@ -178,6 +178,81 @@ class EmailVerifier:
         except (socket.timeout, socket.error, smtplib.SMTPException, Exception) as e:
             return None, f"SMTP handshake connection note: {str(e)}"
 
+    def find_and_verify_executive_email(
+        self, full_name: str, domain: str, role: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Generates executive email permutations for an identified leader and tests them
+        against DNS MX and SMTP handshake verification. Returns the highest-confidence verified email.
+        """
+        candidates = self.generate_executive_email_candidates(full_name, domain, role=role)
+        if not candidates:
+            return None
+
+        for candidate in candidates:
+            res = self.verify_email(candidate)
+            if res.get("is_valid"):
+                return res
+
+        return None
+
+    def generate_executive_email_candidates(
+        self, full_name: str, domain: str, role: Optional[str] = None
+    ) -> List[str]:
+        """Generates standard B2B email permutations for an executive at a given domain."""
+        if not full_name or not domain:
+            return []
+
+        # Clean domain (strip http://, www., paths)
+        clean_domain = domain.lower().replace("https://", "").replace("http://", "").replace("www.", "").split("/")[0].strip()
+        if not clean_domain or "." not in clean_domain:
+            return []
+
+        # Clean name
+        clean_name = re.sub(r"[^a-zA-Z\s]", "", full_name).strip().lower()
+        parts = clean_name.split()
+        if not parts:
+            return []
+
+        first = parts[0]
+        last = parts[-1] if len(parts) > 1 else ""
+
+        candidates = []
+        if first and last:
+            candidates.append(f"{first}.{last}@{clean_domain}")      # john.doe@company.com
+            candidates.append(f"{first}@{clean_domain}")             # john@company.com
+            candidates.append(f"{first[0]}{last}@{clean_domain}")    # jdoe@company.com
+            candidates.append(f"{first}{last}@{clean_domain}")       # johndoe@company.com
+            candidates.append(f"{first[0]}.{last}@{clean_domain}")   # j.doe@company.com
+            candidates.append(f"{first}_{last}@{clean_domain}")      # john_doe@company.com
+        else:
+            candidates.append(f"{first}@{clean_domain}")
+
+        # Role-based executive aliases
+        if role:
+            role_lower = role.lower()
+            if "ceo" in role_lower:
+                candidates.append(f"ceo@{clean_domain}")
+            elif "founder" in role_lower or "owner" in role_lower:
+                candidates.append(f"founder@{clean_domain}")
+            elif "cto" in role_lower:
+                candidates.append(f"cto@{clean_domain}")
+            elif "coo" in role_lower:
+                candidates.append(f"coo@{clean_domain}")
+
+        candidates.append(f"contact@{clean_domain}")
+        candidates.append(f"hello@{clean_domain}")
+
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_candidates = []
+        for c in candidates:
+            if c not in seen:
+                seen.add(c)
+                unique_candidates.append(c)
+
+        return unique_candidates
+
 
 # Global default verifier instance
 email_verifier = EmailVerifier()
