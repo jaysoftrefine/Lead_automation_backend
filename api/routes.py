@@ -169,16 +169,41 @@ def _execute_pipeline_task(req: RunPipelineRequest):
         
         # Scrape a sufficiently wide pool of raw candidate listings to satisfy the qualified goal
         raw_to_fetch = min(max(target_goal * 3, 20), 80)
-        pipeline_state.add_log(f"📡 [1/2] Scraping initial candidate batch of {raw_to_fetch} jobs from {', '.join(req.sites)}...", "info")
+        
+        # 1. Scrape Job Boards (JobSpy)
+        job_board_sites = [s for s in req.sites if "post" not in s.lower()] or ["linkedin", "naukri"]
+        pipeline_state.add_log(f"📡 [1/2] Scraping candidate jobs from {', '.join(job_board_sites)}...", "info")
 
         raw_postings = orchestrator.scraper.scrape(
             search_term=effective_search_term,
             location=req.location,
             results_wanted=raw_to_fetch,
             hours_old=req.hours_old,
-            sites=req.sites,
+            sites=job_board_sites,
             job_type=detected_job_type,
         )
+
+        # 2. Scrape LinkedIn Organic Feed Posts (linkedin-api)
+        feed_posts = []
+        if any("post" in s.lower() for s in req.sites) or (settings.linkedin_email and settings.linkedin_password) or settings.linkedin_li_at_cookie:
+            try:
+                from scraper.linkedin_feed_scraper import linkedin_feed_scraper
+                if linkedin_feed_scraper.is_configured():
+                    pipeline_state.add_log("💬 [LinkedIn Feed] Searching organic 'we are hiring' posts from founders & leaders...", "info")
+                    feed_posts = linkedin_feed_scraper.search_hiring_posts(
+                        search_term=effective_search_term,
+                        limit=min(target_goal, 15),
+                        job_type=detected_job_type,
+                    )
+                    if feed_posts:
+                        pipeline_state.add_log(f"📥 Discovered {len(feed_posts)} organic LinkedIn hiring posts!", "success")
+                else:
+                    pipeline_state.add_log("ℹ️ Add LINKEDIN_EMAIL & LINKEDIN_PASSWORD to .env to scrape private LinkedIn feed posts.", "info")
+            except Exception as feed_err:
+                logger.warning(f"LinkedIn feed post scraping note: {feed_err}")
+
+        # Combine organic posts with structured job listings
+        raw_postings = feed_posts + raw_postings
 
         unique_comps = sorted(list({p.company.strip() for p in raw_postings if p.company and p.company.strip()}))
         metrics = PipelineMetrics(
