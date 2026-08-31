@@ -129,6 +129,11 @@
             <span>EU Startups Explorer</span>
             <span class="tab-badge" id="eu-startups-badge">131</span>
           </button>
+          <button class="tab-btn" data-tab="tab-email">
+            <i data-lucide="mail"></i>
+            <span>Email Campaigns</span>
+            <span class="tab-badge" id="email-campaigns-badge" style="background:linear-gradient(135deg,#10b981,#06b6d4);">0</span>
+          </button>
         </div>
       </nav>
 
@@ -727,7 +732,360 @@
         </div>
       </section>
 
+      <!-- TAB 5: Email Campaigns -->
+      <section id="tab-email" class="tab-panel">
+        <div class="email-campaigns-container">
+
+          <!-- Inner Nav Pills -->
+          <div class="email-inner-nav">
+            <button class="email-pill active" data-epanel="ep-templates">
+              <i data-lucide="file-text"></i> Templates
+            </button>
+            <button class="email-pill" data-epanel="ep-send">
+              <i data-lucide="send"></i> Send Campaign
+            </button>
+            <button class="email-pill" data-epanel="ep-history">
+              <i data-lucide="clock"></i> Campaign History
+            </button>
+            <button class="email-pill" data-epanel="ep-smtp" id="btn-open-smtp" style="margin-left:auto;">
+              <i data-lucide="settings"></i> SMTP Config
+            </button>
+          </div>
+
+          <!-- PANEL 1: Templates -->
+          <div id="ep-templates" class="email-panel active">
+            <div class="email-panel-grid">
+
+              <!-- Template Editor -->
+              <div class="glass-card email-editor-card">
+                <div class="card-header">
+                  <div class="card-title-group">
+                    <i data-lucide="file-edit" class="text-violet"></i>
+                    <h2 id="tpl-editor-title">New Template</h2>
+                  </div>
+                  <div style="display:flex;gap:8px;">
+                    <button id="btn-tpl-clear" class="btn btn-secondary btn-sm">Clear</button>
+                    <button id="btn-tpl-save" class="btn btn-primary btn-sm">
+                      <i data-lucide="save"></i> Save Template
+                    </button>
+                  </div>
+                </div>
+
+                <div class="form-group" style="margin-top:1rem;">
+                  <label for="tpl-name">Template Name</label>
+                  <input type="text" id="tpl-name" placeholder="e.g. Cold Outreach - EU Founders" class="eu-input">
+                </div>
+                <div class="form-group">
+                  <label for="tpl-subject">Email Subject Line</label>
+                  <input type="text" id="tpl-subject" placeholder="e.g. Quick question for {{company_name}}" class="eu-input">
+                </div>
+
+                <!-- Variable Chips Toolbar -->
+                <div class="var-chips-toolbar">
+                  <span class="var-chips-label"><i data-lucide="zap" style="width:12px;height:12px;"></i> Insert Variable:</span>
+                  <div class="var-chips" id="var-chips-container">
+                    <!-- Injected by JS from /api/email/templates/variables -->
+                  </div>
+                </div>
+
+                <div class="form-group">
+                  <label for="tpl-body">Email Body (HTML supported)</label>
+                  <textarea id="tpl-body" rows="12" placeholder="Hi {{first_name}},&#10;&#10;I came across {{company_name}} and was impressed by what you're building...&#10;&#10;Best,&#10;{{sender_name}}"></textarea>
+                </div>
+
+                <input type="hidden" id="tpl-editing-id">
+              </div>
+
+              <!-- Live Preview -->
+              <div class="glass-card email-preview-card">
+                <div class="card-header">
+                  <div class="card-title-group">
+                    <i data-lucide="eye" class="text-emerald"></i>
+                    <h2>Live Preview</h2>
+                  </div>
+                  <button id="btn-tpl-preview" class="btn btn-secondary btn-sm">
+                    <i data-lucide="refresh-cw"></i> Refresh Preview
+                  </button>
+                </div>
+                <div class="preview-subject-line" id="preview-subject">Subject will appear here</div>
+                <div class="preview-email-frame" id="preview-body">
+                  <span style="color:var(--text-muted); font-size:0.85rem;">Write your template on the left and click Refresh Preview to see it rendered with sample data.</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Saved Templates Grid -->
+            <div class="glass-card" style="margin-top:1.25rem;">
+              <div class="card-header">
+                <div class="card-title-group">
+                  <i data-lucide="layers" class="text-cyan"></i>
+                  <h2>Saved Templates</h2>
+                </div>
+                <button id="btn-refresh-templates" class="btn btn-icon-ghost" title="Reload templates">
+                  <i data-lucide="refresh-cw"></i>
+                </button>
+              </div>
+              <div id="templates-grid" class="templates-grid">
+                <div class="empty-state" id="templates-empty" style="display:none;">
+                  <i data-lucide="inbox"></i>
+                  <h3>No Templates Yet</h3>
+                  <p>Create your first email template above to get started.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- PANEL 2: Send Campaign -->
+          <div id="ep-send" class="email-panel">
+            <div class="email-send-grid">
+
+              <!-- Campaign Settings -->
+              <div class="glass-card">
+                <div class="card-header">
+                  <div class="card-title-group">
+                    <i data-lucide="rocket" class="text-amber"></i>
+                    <h2>Configure Campaign</h2>
+                  </div>
+                </div>
+
+                <div class="form-group" style="margin-top:1rem;">
+                  <label for="camp-name">Campaign Name</label>
+                  <input type="text" id="camp-name" placeholder="e.g. EU Founders Cold Outreach — Aug 2026" class="eu-input">
+                </div>
+
+                <div class="form-group">
+                  <label for="camp-template">Email Template</label>
+                  <select id="camp-template" class="custom-select">
+                    <option value="">— Select a template —</option>
+                  </select>
+                </div>
+
+                <!-- Audience Sources -->
+                <div class="form-group">
+                  <label>Audience Sources</label>
+                  <div class="platforms-selector">
+                    <label class="checkbox-chip">
+                      <input type="checkbox" name="camp-source" value="sqlite" checked>
+                      <span class="chip-content"><i data-lucide="database"></i> EU Startups DB</span>
+                    </label>
+                    <label class="checkbox-chip">
+                      <input type="checkbox" name="camp-source" value="mongo">
+                      <span class="chip-content"><i data-lucide="briefcase"></i> LinkedIn Leads DB</span>
+                    </label>
+                    <label class="checkbox-chip">
+                      <input type="checkbox" name="camp-source" value="manual">
+                      <span class="chip-content"><i data-lucide="edit-3"></i> Manual Emails</span>
+                    </label>
+                  </div>
+                </div>
+
+                <!-- Manual Emails input (shown when manual is checked) -->
+                <div class="form-group" id="manual-emails-group" style="display:none;">
+                  <label for="camp-manual-emails">Manual Email Addresses</label>
+                  <textarea id="camp-manual-emails" rows="3" placeholder="One email per line or comma separated:&#10;john@example.com, jane@startup.io"></textarea>
+                </div>
+
+                <!-- Audience Filters -->
+                <div class="form-row">
+                  <div class="form-group flex-1">
+                    <label for="camp-country">Filter by Country (optional)</label>
+                    <input type="text" id="camp-country" placeholder="e.g. Germany" class="eu-input">
+                  </div>
+                  <div class="form-group flex-1">
+                    <label for="camp-category">Filter by Category (optional)</label>
+                    <input type="text" id="camp-category" placeholder="e.g. AI & SaaS" class="eu-input">
+                  </div>
+                  <div class="form-group flex-1">
+                    <label for="camp-delay">Delay Between Emails</label>
+                    <select id="camp-delay" class="custom-select">
+                      <option value="0.5">0.5s (Fast)</option>
+                      <option value="0.8" selected>0.8s (Default)</option>
+                      <option value="1.5">1.5s (Safe)</option>
+                      <option value="3">3s (Conservative)</option>
+                    </select>
+                  </div>
+                </div>
+
+                <!-- Recipient Estimate -->
+                <div class="recipient-estimate-box" id="recipient-estimate-box">
+                  <i data-lucide="users"></i>
+                  <span id="recipient-estimate-text">Select sources to estimate recipients</span>
+                  <button id="btn-estimate" class="btn btn-secondary btn-sm">Estimate</button>
+                </div>
+
+                <!-- Test Send -->
+                <div class="form-group">
+                  <label for="camp-test-email">Send Test Email First (optional)</label>
+                  <div style="display:flex;gap:8px;">
+                    <input type="email" id="camp-test-email" placeholder="your@email.com" class="eu-input" style="flex:1;">
+                    <button id="btn-send-test" class="btn btn-secondary btn-sm">
+                      <i data-lucide="send"></i> Test Send
+                    </button>
+                  </div>
+                </div>
+
+                <div class="form-actions" style="margin-top:1.5rem;">
+                  <button id="btn-launch-campaign" class="btn btn-primary btn-large">
+                    <i data-lucide="rocket"></i>
+                    <span>Launch Bulk Campaign</span>
+                  </button>
+                </div>
+              </div>
+
+              <!-- Live Campaign Progress -->
+              <div class="glass-card">
+                <div class="card-header">
+                  <div class="card-title-group">
+                    <i data-lucide="activity" class="text-emerald"></i>
+                    <h2>Campaign Progress</h2>
+                  </div>
+                  <div id="camp-live-indicator" class="terminal-status-indicator">
+                    <span class="pulse-dot"></span>
+                    <span id="camp-live-text">Idle</span>
+                  </div>
+                </div>
+
+                <div id="camp-progress-wrap" style="display:none; margin-top:1rem;">
+                  <div class="progress-details" style="margin-bottom:0.5rem;">
+                    <span id="camp-progress-label">Sending...</span>
+                    <span id="camp-progress-count" class="text-highlight">0 / 0</span>
+                  </div>
+                  <div class="progress-bar-bg">
+                    <div class="progress-bar-fill" id="camp-progress-fill" style="width:0%;"></div>
+                  </div>
+                  <div style="display:flex;gap:1rem;margin-top:0.75rem;">
+                    <div class="camp-stat-pill success"><i data-lucide="check-circle" style="width:14px;"></i> <span id="camp-stat-sent">0</span> Sent</div>
+                    <div class="camp-stat-pill error"><i data-lucide="x-circle" style="width:14px;"></i> <span id="camp-stat-failed">0</span> Failed</div>
+                    <div class="camp-stat-pill info"><i data-lucide="users" style="width:14px;"></i> <span id="camp-stat-total">0</span> Total</div>
+                  </div>
+                </div>
+
+                <div id="camp-idle-placeholder" class="lab-empty" style="margin-top:2rem;">
+                  <i data-lucide="mail" class="empty-icon"></i>
+                  <p>Configure and launch a campaign on the left. Progress will appear here in real-time.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- PANEL 3: Campaign History -->
+          <div id="ep-history" class="email-panel">
+            <div class="glass-card">
+              <div class="card-header">
+                <div class="card-title-group">
+                  <i data-lucide="clock" class="text-violet"></i>
+                  <h2>Campaign History</h2>
+                </div>
+                <button id="btn-refresh-campaigns" class="btn btn-icon-ghost">
+                  <i data-lucide="refresh-cw"></i>
+                </button>
+              </div>
+
+              <div class="eu-table-wrapper" style="margin-top:1rem;">
+                <table class="eu-startups-table">
+                  <thead>
+                    <tr>
+                      <th>Campaign Name</th>
+                      <th>Template</th>
+                      <th>Status</th>
+                      <th>Sent</th>
+                      <th>Failed</th>
+                      <th>Total</th>
+                      <th>Launched</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody id="campaigns-table-body">
+                    <tr id="campaigns-empty-row">
+                      <td colspan="8" style="text-align:center;padding:40px;color:var(--text-muted);">
+                        No campaigns yet. Launch one from the Send Campaign tab.
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </section>
+
     </main>
+  </div>
+
+  <!-- SMTP Config Modal -->
+  <div id="smtp-modal" class="modal-backdrop">
+    <div class="modal-dialog glass-card" style="max-width:540px;">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <span class="platform-badge" style="background:rgba(245,158,11,0.2);color:#f59e0b;">⚙ SMTP</span>
+          <h2>Email / SMTP Configuration</h2>
+        </div>
+        <button id="btn-close-smtp-modal" class="btn-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p style="color:var(--text-muted);font-size:0.85rem;margin-bottom:1.25rem;">Configure your outgoing mail server. For Gmail, use an App Password (not your regular password). Settings are saved to your local database.</p>
+        <div class="form-row">
+          <div class="form-group flex-2">
+            <label for="smtp-host">SMTP Host</label>
+            <input type="text" id="smtp-host" class="eu-input" placeholder="smtp.gmail.com">
+          </div>
+          <div class="form-group flex-1">
+            <label for="smtp-port">Port</label>
+            <input type="number" id="smtp-port" class="eu-input" value="587">
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="smtp-user">Email Address (Username)</label>
+          <input type="email" id="smtp-user" class="eu-input" placeholder="you@gmail.com">
+        </div>
+        <div class="form-group">
+          <label for="smtp-pass">App Password / SMTP Password</label>
+          <input type="password" id="smtp-pass" class="eu-input" placeholder="Your app password">
+        </div>
+        <div class="form-group">
+          <label for="smtp-from-name">From Name (displayed to recipients)</label>
+          <input type="text" id="smtp-from-name" class="eu-input" placeholder="LeadPulse AI" value="LeadPulse AI">
+        </div>
+        <div class="form-row">
+          <label class="checkbox-chip">
+            <input type="checkbox" id="smtp-use-ssl">
+            <span class="chip-content">SSL (Port 465)</span>
+          </label>
+          <label class="checkbox-chip">
+            <input type="checkbox" id="smtp-use-tls" checked>
+            <span class="chip-content">STARTTLS (Port 587)</span>
+          </label>
+        </div>
+        <div id="smtp-test-result" style="margin-top:0.75rem;font-size:0.85rem;"></div>
+        <div class="modal-footer-actions" style="margin-top:1.5rem;">
+          <button id="btn-smtp-test" class="btn btn-secondary btn-sm">
+            <i data-lucide="zap"></i> Test Connection
+          </button>
+          <button id="btn-smtp-save" class="btn btn-primary btn-sm">
+            <i data-lucide="save"></i> Save Configuration
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Campaign Logs Modal -->
+  <div id="camp-logs-modal" class="modal-backdrop">
+    <div class="modal-dialog glass-card" style="max-width:780px;">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <span class="platform-badge">Campaign Logs</span>
+          <h2 id="logs-modal-title">Delivery Logs</h2>
+        </div>
+        <button id="btn-close-logs-modal" class="btn-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div id="logs-modal-body">
+          <div class="loading-state"><div class="spinner"></div><span>Loading logs...</span></div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- Full Lead Details & Thinking Process Modal -->

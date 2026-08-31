@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.routes import router as api_router
 from api.eu_startups_routes import router as eu_startups_router
+from api.email_routes import router as email_router
 from config.settings import settings
 from core.logging import logger
 from db.mongo import mongo_manager
@@ -44,6 +45,7 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 # Include API routes
 app.include_router(api_router)
 app.include_router(eu_startups_router)
+app.include_router(email_router)
 
 
 @app.on_event("startup")

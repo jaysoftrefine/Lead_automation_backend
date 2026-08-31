@@ -1233,4 +1233,572 @@ document.addEventListener("DOMContentLoaded", () => {
     const euTabBtn = document.querySelector('[data-tab="tab-eu-startups"]');
     if (euTabBtn) euTabBtn.click();
   }
+
+  // ============================================================
+  // EMAIL CAMPAIGNS MODULE
+  // ============================================================
+
+  const EMAIL_API = `${API_BASE}/api/email`;
+  let emailTemplates = [];
+  let activeCampaignId = null;
+  let campaignPollInterval = null;
+
+  // --- Inner pill navigation ---
+  document.querySelectorAll(".email-pill[data-epanel]").forEach(pill => {
+    pill.addEventListener("click", () => {
+      const target = pill.getAttribute("data-epanel");
+      if (target === "ep-smtp") { openSmtpModal(); return; }
+      document.querySelectorAll(".email-pill[data-epanel]").forEach(p => p.classList.remove("active"));
+      document.querySelectorAll(".email-panel").forEach(p => p.classList.remove("active"));
+      pill.classList.add("active");
+      const panel = document.getElementById(target);
+      if (panel) panel.classList.add("active");
+      if (target === "ep-history") loadCampaignHistory();
+    });
+  });
+
+  // Load email tab on switch
+  tabButtons.forEach(btn => {
+    btn.addEventListener("click", () => {
+      if (btn.getAttribute("data-tab") === "tab-email") {
+        loadVariableChips();
+        loadTemplates();
+        loadTemplatesIntoSelect();
+      }
+    });
+  });
+
+  // --- Variable Chips ---
+  async function loadVariableChips() {
+    const container = document.getElementById("var-chips-container");
+    if (!container || container.children.length > 0) return;
+    try {
+      const res = await fetch(`${EMAIL_API}/templates/variables`);
+      const d = await res.json();
+      container.innerHTML = (d.data || []).map(v => `
+        <button type="button" class="var-chip" title="${escapeHtml(v.description)}"
+          onclick="insertVariable('${v.variable.replace(/'/g,"\\'")}')">
+          ${escapeHtml(v.variable)}
+        </button>
+      `).join("");
+      if (window.lucide) lucide.createIcons();
+    } catch (e) { console.warn("Failed to load variable chips", e); }
+  }
+
+  window.insertVariable = function(variable) {
+    const bodyEl = document.getElementById("tpl-body");
+    const subjectEl = document.getElementById("tpl-subject");
+    // Insert into whichever was last focused, default body
+    const target = document.activeElement === subjectEl ? subjectEl : bodyEl;
+    const start = target.selectionStart;
+    const end = target.selectionEnd;
+    const val = target.value;
+    target.value = val.slice(0, start) + variable + val.slice(end);
+    target.selectionStart = target.selectionEnd = start + variable.length;
+    target.focus();
+  };
+
+  // --- Templates CRUD ---
+  async function loadTemplates() {
+    try {
+      const res = await fetch(`${EMAIL_API}/templates`);
+      const d = await res.json();
+      emailTemplates = d.data || [];
+      renderTemplatesGrid(emailTemplates);
+      updateCampaignsBadge(emailTemplates.length);
+    } catch (e) { console.warn("Failed to load templates", e); }
+  }
+
+  async function loadTemplatesIntoSelect() {
+    try {
+      const res = await fetch(`${EMAIL_API}/templates`);
+      const d = await res.json();
+      const sel = document.getElementById("camp-template");
+      if (!sel) return;
+      const current = sel.value;
+      sel.innerHTML = `<option value="">— Select a template —</option>` +
+        (d.data || []).map(t =>
+          `<option value="${t.id}" ${t.id === current ? "selected" : ""}>${escapeHtml(t.name)}</option>`
+        ).join("");
+    } catch (e) {}
+  }
+
+  function renderTemplatesGrid(templates) {
+    const grid = document.getElementById("templates-grid");
+    const empty = document.getElementById("templates-empty");
+    if (!grid) return;
+    if (!templates || templates.length === 0) {
+      grid.innerHTML = "";
+      if (empty) empty.style.display = "flex";
+      return;
+    }
+    if (empty) empty.style.display = "none";
+    grid.innerHTML = templates.map(t => `
+      <div class="template-card">
+        <div class="template-card-name">${escapeHtml(t.name)}</div>
+        <div class="template-card-subject">✉ ${escapeHtml(t.subject)}</div>
+        <div class="template-card-meta">Updated ${formatDateShort(t.updated_at)}</div>
+        ${t.tags ? `<div style="font-size:0.72rem;color:var(--accent-cyan);">🏷 ${escapeHtml(t.tags)}</div>` : ""}
+        <div class="template-card-actions">
+          <button class="btn btn-sm btn-secondary" onclick="editTemplate('${t.id}')">
+            <i data-lucide="edit-3" style="width:12px;height:12px;"></i> Edit
+          </button>
+          <button class="btn btn-sm btn-secondary" onclick="previewTemplate('${t.id}')" style="color:#38bdf8;">
+            <i data-lucide="eye" style="width:12px;height:12px;"></i> Preview
+          </button>
+          <button class="btn btn-sm" onclick="deleteTemplate('${t.id}', '${escapeHtml(t.name).replace(/'/g,"\\'")}', this)"
+            style="color:#fb7185;background:rgba(244,63,94,0.1);border:1px solid rgba(244,63,94,0.25);">
+            <i data-lucide="trash-2" style="width:12px;height:12px;"></i>
+          </button>
+        </div>
+      </div>
+    `).join("");
+    if (window.lucide) lucide.createIcons();
+  }
+
+  function updateCampaignsBadge(count) {
+    const badge = document.getElementById("email-campaigns-badge");
+    if (badge) badge.textContent = count;
+  }
+
+  function formatDateShort(dt) {
+    if (!dt) return "—";
+    try {
+      const d = new Date(dt.includes("T") ? dt : dt.replace(" ", "T"));
+      return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+    } catch(e) { return dt; }
+  }
+
+  // Save template (create or update)
+  const btnTplSave = document.getElementById("btn-tpl-save");
+  if (btnTplSave) {
+    btnTplSave.addEventListener("click", async () => {
+      const name = document.getElementById("tpl-name").value.trim();
+      const subject = document.getElementById("tpl-subject").value.trim();
+      const body = document.getElementById("tpl-body").value.trim();
+      const editingId = document.getElementById("tpl-editing-id").value;
+      if (!name || !subject || !body) {
+        showToast("Please fill in Name, Subject, and Body.", "error"); return;
+      }
+      try {
+        const url = editingId ? `${EMAIL_API}/templates/${editingId}` : `${EMAIL_API}/templates`;
+        const method = editingId ? "PUT" : "POST";
+        const res = await fetch(url, {
+          method, headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, subject, body }),
+        });
+        const d = await res.json();
+        if (!res.ok) throw new Error(d.detail || "Save failed");
+        showToast(editingId ? "Template updated!" : "Template saved!", "success");
+        clearTemplateEditor();
+        loadTemplates();
+        loadTemplatesIntoSelect();
+      } catch (e) { showToast(e.message, "error"); }
+    });
+  }
+
+  const btnTplClear = document.getElementById("btn-tpl-clear");
+  if (btnTplClear) btnTplClear.addEventListener("click", clearTemplateEditor);
+
+  function clearTemplateEditor() {
+    document.getElementById("tpl-name").value = "";
+    document.getElementById("tpl-subject").value = "";
+    document.getElementById("tpl-body").value = "";
+    document.getElementById("tpl-editing-id").value = "";
+    document.getElementById("tpl-editor-title").textContent = "New Template";
+  }
+
+  window.editTemplate = function(id) {
+    const t = emailTemplates.find(x => x.id === id);
+    if (!t) return;
+    document.getElementById("tpl-name").value = t.name;
+    document.getElementById("tpl-subject").value = t.subject;
+    document.getElementById("tpl-body").value = t.body;
+    document.getElementById("tpl-editing-id").value = t.id;
+    document.getElementById("tpl-editor-title").textContent = "Edit Template";
+    document.getElementById("tpl-name").scrollIntoView({ behavior: "smooth", block: "center" });
+  };
+
+  window.deleteTemplate = async function(id, name, btn) {
+    if (!confirm(`Delete template "${name}"?`)) return;
+    try {
+      const res = await fetch(`${EMAIL_API}/templates/${id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error("Delete failed");
+      showToast("Template deleted.", "success");
+      loadTemplates();
+      loadTemplatesIntoSelect();
+    } catch (e) { showToast(e.message, "error"); }
+  };
+
+  window.previewTemplate = async function(id) {
+    try {
+      const res = await fetch(`${EMAIL_API}/templates/${id}/preview`, { method: "POST" });
+      const d = await res.json();
+      document.getElementById("preview-subject").textContent = d.data.rendered_subject;
+      document.getElementById("preview-body").innerHTML = d.data.rendered_body;
+      // Switch to preview panel if on editor
+      document.querySelector(".email-panel.active").scrollIntoView({ behavior:"smooth" });
+    } catch (e) { showToast("Preview failed: " + e.message, "error"); }
+  };
+
+  const btnTplPreview = document.getElementById("btn-tpl-preview");
+  if (btnTplPreview) {
+    btnTplPreview.addEventListener("click", async () => {
+      const subject = document.getElementById("tpl-subject").value;
+      const body = document.getElementById("tpl-body").value;
+      if (!subject && !body) { showToast("Write something first!", "error"); return; }
+      try {
+        const res = await fetch(`${EMAIL_API}/templates/preview-raw`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ subject, body }),
+        });
+        const d = await res.json();
+        document.getElementById("preview-subject").textContent = d.data.rendered_subject || subject;
+        document.getElementById("preview-body").innerHTML = d.data.rendered_body || body;
+      } catch (e) { showToast("Preview error: " + e.message, "error"); }
+    });
+  }
+
+  const btnRefreshTemplates = document.getElementById("btn-refresh-templates");
+  if (btnRefreshTemplates) btnRefreshTemplates.addEventListener("click", loadTemplates);
+
+  // --- SMTP Modal ---
+  const smtpModal = document.getElementById("smtp-modal");
+  const btnOpenSmtp = document.getElementById("btn-open-smtp");
+  const btnCloseSmtpModal = document.getElementById("btn-close-smtp-modal");
+
+  function openSmtpModal() {
+    smtpModal.style.display = "flex";
+    loadSmtpConfig();
+    if (window.lucide) lucide.createIcons();
+  }
+
+  async function loadSmtpConfig() {
+    try {
+      const res = await fetch(`${EMAIL_API}/smtp/config`);
+      const d = await res.json();
+      const cfg = d.data || {};
+      document.getElementById("smtp-host").value = cfg.smtp_host || "";
+      document.getElementById("smtp-port").value = cfg.smtp_port || 587;
+      document.getElementById("smtp-user").value = cfg.smtp_user || "";
+      document.getElementById("smtp-pass").value = "";
+      document.getElementById("smtp-from-name").value = cfg.from_name || "LeadPulse AI";
+      document.getElementById("smtp-use-ssl").checked = !!cfg.use_ssl;
+      document.getElementById("smtp-use-tls").checked = !!cfg.use_tls;
+    } catch(e) {}
+  }
+
+  if (btnOpenSmtp) btnOpenSmtp.addEventListener("click", openSmtpModal);
+  if (btnCloseSmtpModal) btnCloseSmtpModal.addEventListener("click", () => smtpModal.style.display = "none");
+  window.addEventListener("click", e => { if (e.target === smtpModal) smtpModal.style.display = "none"; });
+
+  const btnSmtpSave = document.getElementById("btn-smtp-save");
+  if (btnSmtpSave) {
+    btnSmtpSave.addEventListener("click", async () => {
+      const cfg = getSmtpFormValues();
+      try {
+        const res = await fetch(`${EMAIL_API}/smtp/config`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(cfg),
+        });
+        const d = await res.json();
+        showToast(d.message || "SMTP saved!", "success");
+        smtpModal.style.display = "none";
+      } catch(e) { showToast("Save failed: " + e.message, "error"); }
+    });
+  }
+
+  const btnSmtpTest = document.getElementById("btn-smtp-test");
+  if (btnSmtpTest) {
+    btnSmtpTest.addEventListener("click", async () => {
+      const resultEl = document.getElementById("smtp-test-result");
+      resultEl.textContent = "Testing connection...";
+      resultEl.className = "";
+      const cfg = getSmtpFormValues();
+      try {
+        const res = await fetch(`${EMAIL_API}/smtp/test`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(cfg),
+        });
+        const d = await res.json();
+        resultEl.textContent = d.message;
+        resultEl.className = d.connected ? "smtp-result-ok" : "smtp-result-err";
+      } catch(e) {
+        resultEl.textContent = "Error: " + e.message;
+        resultEl.className = "smtp-result-err";
+      }
+    });
+  }
+
+  function getSmtpFormValues() {
+    return {
+      smtp_host: document.getElementById("smtp-host").value.trim(),
+      smtp_port: parseInt(document.getElementById("smtp-port").value) || 587,
+      smtp_user: document.getElementById("smtp-user").value.trim(),
+      smtp_pass: document.getElementById("smtp-pass").value,
+      from_name: document.getElementById("smtp-from-name").value.trim() || "LeadPulse AI",
+      use_ssl: document.getElementById("smtp-use-ssl").checked,
+      use_tls: document.getElementById("smtp-use-tls").checked,
+    };
+  }
+
+  // --- Manual emails toggle ---
+  document.querySelectorAll("input[name='camp-source']").forEach(cb => {
+    cb.addEventListener("change", () => {
+      const manualGroup = document.getElementById("manual-emails-group");
+      const manualCb = document.querySelector("input[name='camp-source'][value='manual']");
+      if (manualGroup && manualCb) {
+        manualGroup.style.display = manualCb.checked ? "block" : "none";
+      }
+    });
+  });
+
+  // --- Recipient Estimate ---
+  const btnEstimate = document.getElementById("btn-estimate");
+  if (btnEstimate) {
+    btnEstimate.addEventListener("click", async () => {
+      const sources = Array.from(document.querySelectorAll("input[name='camp-source']:checked")).map(x => x.value);
+      const country = document.getElementById("camp-country").value.trim();
+      const category = document.getElementById("camp-category").value.trim();
+      const manualEmails = document.getElementById("camp-manual-emails").value;
+      const params = new URLSearchParams({
+        sources: sources.join(","),
+        country, category, manual_emails: manualEmails,
+      });
+      try {
+        const res = await fetch(`${EMAIL_API}/campaigns/estimate?${params}`);
+        const d = await res.json();
+        const count = d.data?.estimated_recipients || 0;
+        document.getElementById("recipient-estimate-text").textContent = `~${count} recipient${count !== 1 ? "s" : ""} will receive this campaign`;
+      } catch(e) { showToast("Estimate failed: " + e.message, "error"); }
+    });
+  }
+
+  // --- Test Send ---
+  const btnSendTest = document.getElementById("btn-send-test");
+  if (btnSendTest) {
+    btnSendTest.addEventListener("click", async () => {
+      const toEmail = document.getElementById("camp-test-email").value.trim();
+      const templateId = document.getElementById("camp-template").value;
+      if (!toEmail) { showToast("Enter a test email address.", "error"); return; }
+      if (!templateId) { showToast("Select a template first.", "error"); return; }
+      btnSendTest.disabled = true;
+      btnSendTest.textContent = "Sending...";
+      try {
+        const res = await fetch(`${EMAIL_API}/send-test`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ to_email: toEmail, template_id: templateId }),
+        });
+        const d = await res.json();
+        if (d.status === "success") showToast(d.message, "success");
+        else showToast(d.message, "error");
+      } catch(e) { showToast("Test send failed: " + e.message, "error"); }
+      finally {
+        btnSendTest.disabled = false;
+        btnSendTest.innerHTML = `<i data-lucide="send"></i> Test Send`;
+        if (window.lucide) lucide.createIcons();
+      }
+    });
+  }
+
+  // --- Launch Campaign ---
+  const btnLaunchCampaign = document.getElementById("btn-launch-campaign");
+  if (btnLaunchCampaign) {
+    btnLaunchCampaign.addEventListener("click", async () => {
+      const name = document.getElementById("camp-name").value.trim();
+      const templateId = document.getElementById("camp-template").value;
+      const sources = Array.from(document.querySelectorAll("input[name='camp-source']:checked")).map(x => x.value);
+      const country = document.getElementById("camp-country").value.trim();
+      const category = document.getElementById("camp-category").value.trim();
+      const manualEmailsRaw = document.getElementById("camp-manual-emails").value;
+      const manualEmails = manualEmailsRaw ? manualEmailsRaw.split(/[\n,]/).map(e => e.trim()).filter(e => e.includes("@")) : [];
+      const delay = parseFloat(document.getElementById("camp-delay").value) || 0.8;
+
+      if (!name) { showToast("Please enter a campaign name.", "error"); return; }
+      if (!templateId) { showToast("Please select an email template.", "error"); return; }
+      if (sources.length === 0) { showToast("Select at least one audience source.", "error"); return; }
+
+      btnLaunchCampaign.disabled = true;
+      btnLaunchCampaign.innerHTML = `<div class="spinner" style="width:16px;height:16px;border-width:2px;"></div> Launching...`;
+
+      try {
+        const res = await fetch(`${EMAIL_API}/campaigns`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name, template_id: templateId,
+            audience_sources: sources,
+            audience_filters: { country, category },
+            manual_emails: manualEmails,
+            delay_seconds: delay,
+          }),
+        });
+        const d = await res.json();
+        if (!res.ok) throw new Error(d.detail || "Launch failed");
+        showToast(d.message, "success");
+        activeCampaignId = d.data.campaign_id;
+        startCampaignPolling(activeCampaignId, d.data.total_recipients);
+      } catch(e) {
+        showToast(e.message, "error");
+      } finally {
+        btnLaunchCampaign.disabled = false;
+        btnLaunchCampaign.innerHTML = `<i data-lucide="rocket"></i><span>Launch Bulk Campaign</span>`;
+        if (window.lucide) lucide.createIcons();
+      }
+    });
+  }
+
+  function startCampaignPolling(campaignId, total) {
+    const progressWrap = document.getElementById("camp-progress-wrap");
+    const idlePlaceholder = document.getElementById("camp-idle-placeholder");
+    const liveText = document.getElementById("camp-live-text");
+    const pulseDot = document.querySelector("#camp-live-indicator .pulse-dot");
+
+    if (progressWrap) progressWrap.style.display = "block";
+    if (idlePlaceholder) idlePlaceholder.style.display = "none";
+    if (liveText) liveText.textContent = "Running";
+    if (pulseDot) pulseDot.classList.add("running");
+    document.getElementById("camp-stat-total").textContent = total;
+
+    if (campaignPollInterval) clearInterval(campaignPollInterval);
+    campaignPollInterval = setInterval(() => pollCampaign(campaignId, total), 2000);
+    pollCampaign(campaignId, total);
+  }
+
+  async function pollCampaign(campaignId, total) {
+    try {
+      const res = await fetch(`${EMAIL_API}/campaigns/${campaignId}`);
+      const d = await res.json();
+      const c = d.data;
+      const sent = c.sent || 0;
+      const failed = c.failed_count || 0;
+      const t = c.total || total || 1;
+      const pct = Math.min(100, Math.round((sent + failed) / t * 100));
+
+      document.getElementById("camp-progress-fill").style.width = `${pct}%`;
+      document.getElementById("camp-progress-count").textContent = `${sent + failed} / ${t}`;
+      document.getElementById("camp-progress-label").textContent = c.status === "completed"
+        ? `✅ Campaign complete! ${sent} sent, ${failed} failed.`
+        : `Sending emails... ${sent} sent, ${failed} failed`;
+      document.getElementById("camp-stat-sent").textContent = sent;
+      document.getElementById("camp-stat-failed").textContent = failed;
+      document.getElementById("camp-stat-total").textContent = t;
+
+      if (c.status === "completed" || c.status === "failed") {
+        clearInterval(campaignPollInterval);
+        campaignPollInterval = null;
+        const liveText = document.getElementById("camp-live-text");
+        const pulseDot = document.querySelector("#camp-live-indicator .pulse-dot");
+        if (liveText) liveText.textContent = c.status === "completed" ? "Done" : "Failed";
+        if (pulseDot) pulseDot.classList.remove("running");
+        if (c.status === "completed") {
+          document.getElementById("camp-progress-fill").style.background = "linear-gradient(90deg,#10b981,#06b6d4)";
+        }
+      }
+    } catch(e) {}
+  }
+
+  // --- Campaign History ---
+  async function loadCampaignHistory() {
+    const tbody = document.getElementById("campaigns-table-body");
+    const emptyRow = document.getElementById("campaigns-empty-row");
+    if (!tbody) return;
+    try {
+      const res = await fetch(`${EMAIL_API}/campaigns`);
+      const d = await res.json();
+      const campaigns = d.data || [];
+      if (campaigns.length === 0) {
+        if (emptyRow) emptyRow.style.display = "";
+        return;
+      }
+      if (emptyRow) emptyRow.style.display = "none";
+      tbody.innerHTML = campaigns.map(c => {
+        const statusCls = c.status || "pending";
+        const statusLabel = {
+          pending: "Pending", queued: "Queued", running: "Running",
+          completed: "Done", failed: "Failed"
+        }[statusCls] || c.status;
+        return `
+          <tr>
+            <td><strong style="color:#fff;">${escapeHtml(c.name)}</strong></td>
+            <td style="color:var(--text-muted);">${escapeHtml(c.template_name || "—")}</td>
+            <td><span class="camp-status-badge ${statusCls}">${statusLabel}</span></td>
+            <td style="color:#10b981;font-weight:700;">${c.sent || 0}</td>
+            <td style="color:#fb7185;font-weight:700;">${c.failed_count || 0}</td>
+            <td style="color:var(--text-muted);">${c.total || 0}</td>
+            <td style="font-size:0.78rem;color:var(--text-muted);">${formatDateShort(c.created_at)}</td>
+            <td>
+              <button class="btn btn-sm btn-secondary" onclick="viewCampaignLogs('${c.id}', '${escapeHtml(c.name).replace(/'/g,"\\'")}')">
+                <i data-lucide="list" style="width:12px;height:12px;"></i> Logs
+              </button>
+            </td>
+          </tr>
+        `;
+      }).join("");
+      if (window.lucide) lucide.createIcons();
+    } catch(e) { console.warn("Failed to load campaign history", e); }
+  }
+
+  const btnRefreshCampaigns = document.getElementById("btn-refresh-campaigns");
+  if (btnRefreshCampaigns) btnRefreshCampaigns.addEventListener("click", loadCampaignHistory);
+
+  // --- Campaign Logs Modal ---
+  const campLogsModal = document.getElementById("camp-logs-modal");
+  const btnCloseLogsModal = document.getElementById("btn-close-logs-modal");
+  if (btnCloseLogsModal) btnCloseLogsModal.addEventListener("click", () => campLogsModal.style.display = "none");
+  window.addEventListener("click", e => { if (e.target === campLogsModal) campLogsModal.style.display = "none"; });
+
+  window.viewCampaignLogs = async function(campaignId, campaignName) {
+    document.getElementById("logs-modal-title").textContent = `Logs: ${campaignName}`;
+    document.getElementById("logs-modal-body").innerHTML = `<div class="loading-state"><div class="spinner"></div><span>Loading logs...</span></div>`;
+    campLogsModal.style.display = "flex";
+    try {
+      const res = await fetch(`${EMAIL_API}/campaigns/${campaignId}/logs?per_page=200`);
+      const d = await res.json();
+      const logs = d.data || [];
+      if (logs.length === 0) {
+        document.getElementById("logs-modal-body").innerHTML = `<p style="color:var(--text-muted);text-align:center;padding:2rem;">No logs yet for this campaign.</p>`;
+        return;
+      }
+      const sentCount = logs.filter(l => l.status === "sent").length;
+      const failedCount = logs.filter(l => l.status === "failed").length;
+      document.getElementById("logs-modal-body").innerHTML = `
+        <div style="display:flex;gap:1rem;margin-bottom:1rem;flex-wrap:wrap;">
+          <div class="camp-stat-pill success"><span>${sentCount}</span> Sent</div>
+          <div class="camp-stat-pill error"><span>${failedCount}</span> Failed</div>
+          <div class="camp-stat-pill info"><span>${logs.length}</span> Total</div>
+        </div>
+        <div style="overflow-x:auto;">
+          <table class="logs-table">
+            <thead>
+              <tr>
+                <th>Recipient</th>
+                <th>Email</th>
+                <th>Company</th>
+                <th>Status</th>
+                <th>Error</th>
+                <th>Sent At</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${logs.map(l => `
+                <tr>
+                  <td>${escapeHtml(l.recipient_name || "—")}</td>
+                  <td style="font-family:var(--font-mono);font-size:0.75rem;">${escapeHtml(l.recipient_email || "—")}</td>
+                  <td>${escapeHtml(l.company_name || "—")}</td>
+                  <td><span class="log-status-${l.status}">${l.status === "sent" ? "✓ Sent" : "✗ Failed"}</span></td>
+                  <td style="font-size:0.72rem;color:#fb7185;">${escapeHtml(l.error_message || "")}</td>
+                  <td style="font-size:0.72rem;white-space:nowrap;">${formatDateShort(l.sent_at)}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        </div>
+      `;
+      if (window.lucide) lucide.createIcons();
+    } catch(e) {
+      document.getElementById("logs-modal-body").innerHTML = `<p style="color:#fb7185;">Error loading logs: ${escapeHtml(e.message)}</p>`;
+    }
+  };
+
 });
