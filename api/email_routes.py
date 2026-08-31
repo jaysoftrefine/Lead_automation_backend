@@ -1,22 +1,24 @@
-"""
-FastAPI Router — Email Templates & Bulk Campaign Endpoints.
-Prefix: /api/email
-"""
-
+import os
 import json
 import uuid
+import shutil
+from pathlib import Path
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, UploadFile, File
 from pydantic import BaseModel
 
-from email.db import get_connection, get_smtp_config, save_smtp_config
-from email.smtp_sender import test_smtp_connection, send_email
-from email.template_engine import get_sample_context, resolve_variables, AVAILABLE_VARIABLES
-from email.campaign_runner import launch_campaign, count_recipients
+from email_campaigns.db import get_connection, get_smtp_config, save_smtp_config
+from email_campaigns.smtp_sender import test_smtp_connection, send_email
+from email_campaigns.template_engine import get_sample_context, resolve_variables, AVAILABLE_VARIABLES
+from email_campaigns.campaign_runner import launch_campaign, count_recipients
 
 router = APIRouter(prefix="/api/email", tags=["Email Campaigns"])
+
+ROOT_DIR = Path(__file__).resolve().parent.parent
+ATTACHMENTS_DIR = ROOT_DIR / "uploads" / "attachments"
+ATTACHMENTS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # ─────────────────────────────────────────────
@@ -28,6 +30,8 @@ class TemplateCreate(BaseModel):
     subject: str
     body: str
     tags: Optional[str] = ""
+    attachment_path: Optional[str] = None
+    attachment_name: Optional[str] = None
 
 
 class TemplateUpdate(BaseModel):
@@ -35,6 +39,8 @@ class TemplateUpdate(BaseModel):
     subject: Optional[str] = None
     body: Optional[str] = None
     tags: Optional[str] = None
+    attachment_path: Optional[str] = None
+    attachment_name: Optional[str] = None
 
 
 class SMTPConfigBody(BaseModel):
@@ -50,10 +56,12 @@ class SMTPConfigBody(BaseModel):
 class CampaignCreate(BaseModel):
     name: str
     template_id: str
-    audience_sources: List[str] = ["sqlite"]   # "sqlite", "mongo", "manual"
+    audience_sources: List[str] = ["sqlite"]   # "sqlite", "mongo", "manual", "selected"
     audience_filters: Dict[str, Any] = {}       # country, category
     manual_emails: Optional[List[str]] = None
+    selected_recipients: Optional[List[Dict[str, Any]]] = None
     delay_seconds: float = 0.8
+
 
 
 class TestEmailBody(BaseModel):
@@ -61,6 +69,42 @@ class TestEmailBody(BaseModel):
     template_id: Optional[str] = None
     subject: Optional[str] = None
     body: Optional[str] = None
+    attachment_path: Optional[str] = None
+    attachment_name: Optional[str] = None
+
+
+# ─────────────────────────────────────────────
+# Attachment Upload Endpoint
+# ─────────────────────────────────────────────
+
+@router.post("/attachments/upload")
+async def upload_attachment(file: UploadFile = File(...)) -> Dict[str, Any]:
+    """Upload a PDF attachment and store it in uploads/attachments/."""
+    original_filename = file.filename or "document.pdf"
+    if not original_filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files (.pdf) are allowed as attachments.")
+
+    file_uuid = uuid.uuid4().hex[:10]
+    safe_filename = f"{file_uuid}_{original_filename.replace(' ', '_')}"
+    destination = ATTACHMENTS_DIR / safe_filename
+
+    try:
+        with destination.open("wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save attachment file: {str(e)}")
+
+    file_size_kb = round(destination.stat().st_size / 1024, 1)
+
+    return {
+        "status": "success",
+        "message": f"Attached {original_filename} ({file_size_kb} KB)",
+        "data": {
+            "attachment_name": original_filename,
+            "attachment_path": str(destination),
+            "file_size_kb": file_size_kb,
+        },
+    }
 
 
 # ─────────────────────────────────────────────
@@ -122,13 +166,13 @@ def list_templates() -> Dict[str, Any]:
 
 @router.post("/templates")
 def create_template(body: TemplateCreate) -> Dict[str, Any]:
-    """Create a new email template."""
+    """Create a new email template with optional attachment."""
     tid = str(uuid.uuid4())
     conn = get_connection()
     conn.execute("""
-        INSERT INTO email_templates (id, name, subject, body, tags)
-        VALUES (?, ?, ?, ?, ?)
-    """, (tid, body.name.strip(), body.subject.strip(), body.body, body.tags or ""))
+        INSERT INTO email_templates (id, name, subject, body, tags, attachment_path, attachment_name)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (tid, body.name.strip(), body.subject.strip(), body.body, body.tags or "", body.attachment_path, body.attachment_name))
     conn.commit()
     row = conn.execute("SELECT * FROM email_templates WHERE id = ?", (tid,)).fetchone()
     conn.close()
@@ -173,6 +217,10 @@ def update_template(template_id: str, body: TemplateUpdate) -> Dict[str, Any]:
         updates["body"] = body.body
     if body.tags is not None:
         updates["tags"] = body.tags
+    if body.attachment_path is not None:
+        updates["attachment_path"] = body.attachment_path
+    if body.attachment_name is not None:
+        updates["attachment_name"] = body.attachment_name
 
     if updates:
         set_sql = ", ".join(f"{k} = ?" for k in updates)
@@ -220,12 +268,14 @@ def preview_template(template_id: str) -> Dict[str, Any]:
             "rendered_subject": subj,
             "rendered_body": body,
             "sample_context": ctx,
+            "attachment_name": row["attachment_name"] if "attachment_name" in row.keys() else None,
+            "attachment_path": row["attachment_path"] if "attachment_path" in row.keys() else None,
         },
     }
 
 
 @router.post("/templates/preview-raw")
-def preview_raw(body: Dict[str, str]) -> Dict[str, Any]:
+def preview_raw(body: Dict[str, Any]) -> Dict[str, Any]:
     """Render a raw subject + body (not yet saved) with sample data for live preview."""
     cfg = get_smtp_config()
     ctx = get_sample_context(sender_name=cfg.get("from_name", "Your Name"))
@@ -234,15 +284,24 @@ def preview_raw(body: Dict[str, str]) -> Dict[str, Any]:
     )
     return {
         "status": "success",
-        "data": {"rendered_subject": subj, "rendered_body": rendered_body, "sample_context": ctx},
+        "data": {
+            "rendered_subject": subj,
+            "rendered_body": rendered_body,
+            "sample_context": ctx,
+            "attachment_name": body.get("attachment_name"),
+            "attachment_path": body.get("attachment_path"),
+        },
     }
 
 
 @router.post("/send-test")
 def send_test_email(body: TestEmailBody) -> Dict[str, Any]:
-    """Send a single test email to verify SMTP and template rendering."""
+    """Send a single test email to verify SMTP and template rendering with optional PDF attachment."""
     cfg = get_smtp_config()
     ctx = get_sample_context(sender_name=cfg.get("from_name", "Your Name"))
+
+    attachment_path = body.attachment_path
+    attachment_name = body.attachment_name
 
     if body.template_id:
         conn = get_connection()
@@ -251,15 +310,25 @@ def send_test_email(body: TestEmailBody) -> Dict[str, Any]:
         if not row:
             raise HTTPException(status_code=404, detail="Template not found.")
         subject, html_body = resolve_variables(row["subject"], row["body"], ctx)
+        if not attachment_path and "attachment_path" in row.keys():
+            attachment_path = row["attachment_path"]
+            attachment_name = row["attachment_name"]
     elif body.subject and body.body:
         subject, html_body = resolve_variables(body.subject, body.body, ctx)
     else:
         raise HTTPException(status_code=400, detail="Provide template_id or subject+body.")
 
-    ok, err = send_email(body.to_email, subject, html_body, cfg)
+    ok, err = send_email(
+        body.to_email, subject, html_body, cfg,
+        attachment_path=attachment_path,
+        attachment_name=attachment_name
+    )
     if not ok:
         return {"status": "failed", "message": f"Failed to send: {err}"}
-    return {"status": "success", "message": f"Test email sent to {body.to_email} ✓"}
+    return {
+        "status": "success",
+        "message": f"Test email sent to {body.to_email}{' with attachment' if attachment_path else ''} ✓"
+    }
 
 
 # ─────────────────────────────────────────────
@@ -279,7 +348,7 @@ def list_campaigns() -> Dict[str, Any]:
 
 @router.post("/campaigns")
 def create_campaign(body: CampaignCreate) -> Dict[str, Any]:
-    """Create and immediately launch a bulk email campaign."""
+    """Create and immediately launch a bulk email campaign with optional attachment."""
     # Validate template exists
     conn = get_connection()
     tpl = conn.execute(
@@ -300,13 +369,17 @@ def create_campaign(body: CampaignCreate) -> Dict[str, Any]:
 
     # Create campaign record
     cid = str(uuid.uuid4())
+    attachment_path = tpl["attachment_path"] if "attachment_path" in tpl.keys() else None
+    attachment_name = tpl["attachment_name"] if "attachment_name" in tpl.keys() else None
+
     conn.execute("""
         INSERT INTO email_campaigns
-            (id, name, template_id, template_name, subject, status, audience_filter)
-        VALUES (?, ?, ?, ?, ?, 'queued', ?)
+            (id, name, template_id, template_name, subject, attachment_path, attachment_name, status, audience_filter)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?)
     """, (
         cid, body.name.strip(), body.template_id,
         tpl["name"], tpl["subject"],
+        attachment_path, attachment_name,
         json.dumps(body.audience_filters),
     ))
     conn.commit()
@@ -320,12 +393,15 @@ def create_campaign(body: CampaignCreate) -> Dict[str, Any]:
         audience_sources=body.audience_sources,
         audience_filters=body.audience_filters,
         manual_emails=body.manual_emails,
+        selected_recipients=body.selected_recipients,
         delay_seconds=body.delay_seconds,
+        attachment_path=attachment_path,
+        attachment_name=attachment_name,
     )
 
     return {
         "status": "success",
-        "message": f"Campaign launched! Sending to {total} recipient(s).",
+        "message": f"Campaign launched! Sending to {total} recipient(s){' with PDF attachment' if attachment_path else ''}.",
         "data": {"campaign_id": cid, "total_recipients": total},
     }
 

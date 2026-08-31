@@ -27,13 +27,15 @@ def init_email_tables() -> None:
     # Email Templates
     cur.execute("""
         CREATE TABLE IF NOT EXISTS email_templates (
-            id          TEXT PRIMARY KEY,
-            name        TEXT NOT NULL,
-            subject     TEXT NOT NULL,
-            body        TEXT NOT NULL,
-            tags        TEXT DEFAULT '',
-            created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            id              TEXT PRIMARY KEY,
+            name            TEXT NOT NULL,
+            subject         TEXT NOT NULL,
+            body            TEXT NOT NULL,
+            tags            TEXT DEFAULT '',
+            attachment_path TEXT,
+            attachment_name TEXT,
+            created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
 
@@ -45,6 +47,8 @@ def init_email_tables() -> None:
             template_id     TEXT NOT NULL,
             template_name   TEXT,
             subject         TEXT,
+            attachment_path TEXT,
+            attachment_name TEXT,
             status          TEXT DEFAULT 'pending',
             total           INTEGER DEFAULT 0,
             sent            INTEGER DEFAULT 0,
@@ -55,6 +59,14 @@ def init_email_tables() -> None:
             finished_at     TIMESTAMP
         )
     """)
+
+    # Safe column migrations for existing databases
+    for table in ["email_templates", "email_campaigns"]:
+        cols = [col[1] for col in cur.execute(f"PRAGMA table_info({table})").fetchall()]
+        if "attachment_path" not in cols:
+            cur.execute(f"ALTER TABLE {table} ADD COLUMN attachment_path TEXT")
+        if "attachment_name" not in cols:
+            cur.execute(f"ALTER TABLE {table} ADD COLUMN attachment_name TEXT")
 
     # Per-recipient delivery logs
     cur.execute("""

@@ -25,6 +25,7 @@ tavily-python>=0.3.3
 # Web Server & API
 fastapi>=0.110.0
 uvicorn>=0.29.0
+python-multipart>=0.0.9
 
 # LinkedIn Feed API
 linkedin-api>=2.3.1

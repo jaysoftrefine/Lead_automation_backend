@@ -19,10 +19,13 @@ from db.mongo import mongo_manager
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 TEMPLATES_DIR = BASE_DIR / "templates"
+UPLOADS_DIR = BASE_DIR / "uploads"
+FRONTEND_DIST = BASE_DIR / "frontend" / "dist"
 
 # Create directories if needed
 STATIC_DIR.mkdir(parents=True, exist_ok=True)
 TEMPLATES_DIR.mkdir(parents=True, exist_ok=True)
+UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(
     title="Autonomous B2B Lead Generation Engine",
@@ -39,8 +42,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Mount static files
+# Mount static files & uploads
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+app.mount("/uploads", StaticFiles(directory=str(UPLOADS_DIR)), name="uploads")
+if FRONTEND_DIST.exists():
+    app.mount("/assets", StaticFiles(directory=str(FRONTEND_DIST / "assets")), name="assets")
 
 # Include API routes
 app.include_router(api_router)
@@ -67,7 +73,10 @@ async def shutdown_event():
 
 @app.get("/", response_class=HTMLResponse)
 async def serve_dashboard(request: Request):
-    """Serve the single-page frontend application dashboard."""
+    """Serve the single-page frontend application dashboard (React or Static)."""
+    react_index = FRONTEND_DIST / "index.html"
+    if react_index.exists():
+        return FileResponse(str(react_index))
     index_path = TEMPLATES_DIR / "index.html"
     if index_path.exists():
         return FileResponse(str(index_path))
@@ -76,12 +85,18 @@ async def serve_dashboard(request: Request):
 
 @app.get("/eu-startups", response_class=HTMLResponse)
 @app.get("/startups", response_class=HTMLResponse)
-async def serve_eu_startups(request: Request):
-    """Direct route to the EU Startups Explorer section."""
+@app.get("/campaigns", response_class=HTMLResponse)
+@app.get("/pipeline", response_class=HTMLResponse)
+@app.get("/leads", response_class=HTMLResponse)
+async def serve_spa_routes(request: Request):
+    """Direct SPA route handler."""
+    react_index = FRONTEND_DIST / "index.html"
+    if react_index.exists():
+        return FileResponse(str(react_index))
     index_path = TEMPLATES_DIR / "index.html"
     if index_path.exists():
         return FileResponse(str(index_path))
-    return HTMLResponse("<h1>EU Startups Explorer</h1><p>Template not found.</p>")
+    return HTMLResponse("<h1>LeadPulse AI</h1><p>Template not found.</p>")
 
 
 if __name__ == "__main__":

@@ -1,24 +1,49 @@
-"""
-SMTP Sender — sends individual emails and tests SMTP connection.
-Supports SSL (port 465) and STARTTLS (port 587).
-"""
-
+import os
 import smtplib
 import ssl
+import mimetypes
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from typing import Tuple
+from email.mime.application import MIMEApplication
+from typing import Tuple, Optional
 
-from email.db import get_smtp_config
+from email_campaigns.db import get_smtp_config
 
 
 def _build_message(smtp_user: str, from_name: str, to_email: str,
-                   subject: str, html_body: str) -> MIMEMultipart:
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-    msg["From"] = f"{from_name} <{smtp_user}>"
-    msg["To"] = to_email
-    msg.attach(MIMEText(html_body, "html", "utf-8"))
+                   subject: str, html_body: str,
+                   attachment_path: Optional[str] = None,
+                   attachment_name: Optional[str] = None) -> MIMEMultipart:
+    # If there's an attachment, use mixed outer with alternative inner
+    if attachment_path and os.path.exists(attachment_path):
+        msg = MIMEMultipart("mixed")
+        msg["Subject"] = subject
+        msg["From"] = f"{from_name} <{smtp_user}>"
+        msg["To"] = to_email
+
+        # Body part
+        alt_part = MIMEMultipart("alternative")
+        alt_part.attach(MIMEText(html_body, "html", "utf-8"))
+        msg.attach(alt_part)
+
+        # Attachment part
+        try:
+            with open(attachment_path, "rb") as f:
+                pdf_data = f.read()
+            file_name = attachment_name or os.path.basename(attachment_path)
+            part = MIMEApplication(pdf_data, _subtype="pdf")
+            part.add_header("Content-Disposition", "attachment", filename=file_name)
+            msg.attach(part)
+        except Exception:
+            # Fallback if attachment reading fails, still send email
+            pass
+    else:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"] = f"{from_name} <{smtp_user}>"
+        msg["To"] = to_email
+        msg.attach(MIMEText(html_body, "html", "utf-8"))
+
     return msg
 
 
@@ -61,9 +86,11 @@ def test_smtp_connection(config: dict | None = None) -> Tuple[bool, str]:
 
 
 def send_email(to_email: str, subject: str, html_body: str,
-               config: dict | None = None) -> Tuple[bool, str]:
+               config: dict | None = None,
+               attachment_path: Optional[str] = None,
+               attachment_name: Optional[str] = None) -> Tuple[bool, str]:
     """
-    Send a single HTML email.
+    Send a single HTML email with optional attachment.
     Returns (True, "") on success or (False, error_message) on failure.
     """
     cfg = config or get_smtp_config()
@@ -79,7 +106,11 @@ def send_email(to_email: str, subject: str, html_body: str,
         return False, "SMTP not configured. Please configure SMTP settings first."
 
     try:
-        msg = _build_message(user, from_name, to_email, subject, html_body)
+        msg = _build_message(
+            user, from_name, to_email, subject, html_body,
+            attachment_path=attachment_path,
+            attachment_name=attachment_name
+        )
         if use_ssl:
             ctx = ssl.create_default_context()
             with smtplib.SMTP_SSL(host, port, context=ctx, timeout=15) as server:

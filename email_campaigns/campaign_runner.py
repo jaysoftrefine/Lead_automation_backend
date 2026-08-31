@@ -10,9 +10,9 @@ import threading
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 
-from email.db import get_connection, get_smtp_config
-from email.smtp_sender import send_email
-from email.template_engine import build_context, resolve_variables
+from email_campaigns.db import get_connection, get_smtp_config
+from email_campaigns.smtp_sender import send_email
+from email_campaigns.template_engine import build_context, resolve_variables
 
 
 def _get_recipients_from_sqlite(filters: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -166,10 +166,12 @@ def run_campaign_in_background(
     body_template: str,
     recipients: List[Dict[str, Any]],
     delay_seconds: float = 0.8,
+    attachment_path: Optional[str] = None,
+    attachment_name: Optional[str] = None,
 ) -> None:
     """
     Background thread worker: iterates recipients, renders per-person,
-    sends email, logs result, and updates counters.
+    sends email with optional attachment, logs result, and updates counters.
     """
     smtp_cfg = get_smtp_config()
     sender_name = smtp_cfg.get("from_name", "LeadPulse AI")
@@ -192,7 +194,11 @@ def run_campaign_in_background(
             email=r.get("email"),
         )
         rendered_subject, rendered_body = resolve_variables(subject_template, body_template, ctx)
-        ok, err = send_email(r["email"], rendered_subject, rendered_body, smtp_cfg)
+        ok, err = send_email(
+            r["email"], rendered_subject, rendered_body, smtp_cfg,
+            attachment_path=attachment_path,
+            attachment_name=attachment_name
+        )
 
         if ok:
             sent += 1
@@ -217,10 +223,13 @@ def launch_campaign(
     campaign_id: str,
     subject_template: str,
     body_template: str,
-    audience_sources: List[str],        # e.g. ["sqlite", "mongo", "manual"]
+    audience_sources: List[str],        # e.g. ["sqlite", "mongo", "manual", "selected"]
     audience_filters: Dict[str, Any],   # country, category, etc.
     manual_emails: Optional[List[str]] = None,
+    selected_recipients: Optional[List[Dict[str, Any]]] = None,
     delay_seconds: float = 0.8,
+    attachment_path: Optional[str] = None,
+    attachment_name: Optional[str] = None,
 ) -> int:
     """
     Build recipient list from requested sources and launch the campaign.
@@ -228,6 +237,14 @@ def launch_campaign(
     """
     recipients: List[Dict[str, Any]] = []
     seen_emails: set[str] = set()
+
+    # If explicitly selected contacts were provided
+    if selected_recipients:
+        for r in selected_recipients:
+            e = (r.get("email") or "").lower().strip()
+            if e and e not in seen_emails:
+                seen_emails.add(e)
+                recipients.append(r)
 
     if "sqlite" in audience_sources:
         for r in _get_recipients_from_sqlite(audience_filters):
@@ -255,7 +272,7 @@ def launch_campaign(
 
     t = threading.Thread(
         target=run_campaign_in_background,
-        args=(campaign_id, subject_template, body_template, recipients, delay_seconds),
+        args=(campaign_id, subject_template, body_template, recipients, delay_seconds, attachment_path, attachment_name),
         daemon=True,
     )
     t.start()
@@ -266,10 +283,18 @@ def count_recipients(
     audience_sources: List[str],
     audience_filters: Dict[str, Any],
     manual_emails: Optional[List[str]] = None,
+    selected_recipients: Optional[List[Dict[str, Any]]] = None,
 ) -> int:
     """Estimate recipient count without launching the campaign."""
     seen_emails: set[str] = set()
     count = 0
+
+    if selected_recipients:
+        for r in selected_recipients:
+            e = (r.get("email") or "").lower().strip()
+            if e and e not in seen_emails:
+                seen_emails.add(e)
+                count += 1
 
     if "sqlite" in audience_sources:
         for r in _get_recipients_from_sqlite(audience_filters):
