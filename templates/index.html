@@ -124,6 +124,11 @@
             <i data-lucide="bot"></i>
             <span>Instant Agent Lab</span>
           </button>
+          <button class="tab-btn" data-tab="tab-eu-startups">
+            <i data-lucide="building-2"></i>
+            <span>EU Startups Explorer</span>
+            <span class="tab-badge" id="eu-startups-badge">131</span>
+          </button>
         </div>
       </nav>
 
@@ -172,10 +177,6 @@
                   <label class="checkbox-chip">
                     <input type="checkbox" name="sites" value="linkedin" checked>
                     <span class="chip-content"><i data-lucide="briefcase"></i> LinkedIn Jobs</span>
-                  </label>
-                  <label class="checkbox-chip">
-                    <input type="checkbox" name="sites" value="linkedin_posts" checked>
-                    <span class="chip-content"><i data-lucide="message-square"></i> LinkedIn Posts (Feed)</span>
                   </label>
                   <label class="checkbox-chip">
                     <input type="checkbox" name="sites" value="naukri" checked>
@@ -394,49 +395,59 @@
         </div>
       </section>
 
-      <!-- TAB 3: Direct LinkedIn Post & Job URL Scraper / Lab -->
+      <!-- TAB 3: Direct Lead & Company Enrichment Lab -->
       <section id="tab-instant-research" class="tab-panel">
         <div class="lab-grid">
           <!-- Input Card -->
           <div class="glass-card lab-card">
             <div class="card-header">
               <div class="card-title-group">
-                <i data-lucide="linkedin" class="text-violet" style="color: #38bdf8;"></i>
-                <h2>LinkedIn Post & Single Job Scraper</h2>
+                <i data-lucide="bot" class="text-violet" style="color: #38bdf8;"></i>
+                <h2>Instant Lead & Company Research Lab</h2>
               </div>
-              <p class="card-subtitle">Scrape any LinkedIn hiring post URL, LinkedIn job link, or paste a hiring update to extract decision-makers, verified emails, and company intel.</p>
+              <p class="card-subtitle">Test autonomous LLM web research and contact discovery on any custom company & job opportunity.</p>
             </div>
 
             <form id="instant-research-form" class="instant-form">
-              <div class="form-group">
-                <label for="lab-url">LinkedIn Post URL or Job URL <span class="text-highlight">(Paste URL)</span></label>
-                <div class="input-with-icon">
-                  <i data-lucide="link"></i>
-                  <input type="url" id="lab-url" placeholder="https://www.linkedin.com/posts/... or https://www.linkedin.com/jobs/view/...">
-                </div>
-              </div>
-
               <div class="form-row">
                 <div class="form-group flex-1">
-                  <label for="lab-company">Company Name (Optional if URL provided)</label>
+                  <label for="lab-company">Target Company Name <span class="req">*</span></label>
                   <div class="input-with-icon">
                     <i data-lucide="building-2"></i>
-                    <input type="text" id="lab-company" placeholder="e.g. Scitron, Stripe, OpenAI">
+                    <input type="text" id="lab-company" placeholder="e.g. Scitron, Stripe, OpenAI" required>
                   </div>
                 </div>
 
                 <div class="form-group flex-1">
-                  <label for="lab-title">Target Role / Title (Optional)</label>
+                  <label for="lab-title">Target Role / Job Title <span class="req">*</span></label>
                   <div class="input-with-icon">
                     <i data-lucide="tag"></i>
-                    <input type="text" id="lab-title" placeholder="e.g. Freelance AI ML Engineer">
+                    <input type="text" id="lab-title" placeholder="e.g. Senior AI Engineer, Python Developer" required>
                   </div>
                 </div>
               </div>
 
               <div class="form-row">
                 <div class="form-group flex-1">
-                  <label for="lab-size">Target Size</label>
+                  <label for="lab-location">Location / Market</label>
+                  <div class="input-with-icon">
+                    <i data-lucide="map-pin"></i>
+                    <input type="text" id="lab-location" placeholder="e.g. Remote, United Kingdom, USA" value="Remote">
+                  </div>
+                </div>
+
+                <div class="form-group flex-1">
+                  <label for="lab-url">Job Listing / Website URL (Optional)</label>
+                  <div class="input-with-icon">
+                    <i data-lucide="link"></i>
+                    <input type="url" id="lab-url" placeholder="https://example.com/jobs/...">
+                  </div>
+                </div>
+              </div>
+
+              <div class="form-row">
+                <div class="form-group flex-1">
+                  <label for="lab-size">Target Company Size</label>
                   <select id="lab-size" class="custom-select">
                     <option value="small" selected>🌱 Small (1-50 employees)</option>
                     <option value="medium">🏢 Medium (51-500)</option>
@@ -446,24 +457,25 @@
                 </div>
 
                 <div class="form-group flex-1">
-                  <label for="lab-type">Job Type</label>
+                  <label for="lab-type">Job / Engagement Type</label>
                   <select id="lab-type" class="custom-select">
-                    <option value="contract" selected>🤝 Freelance / Contract</option>
+                    <option value="all" selected>🌐 All Types</option>
+                    <option value="contract">🤝 Freelance / Contract</option>
                     <option value="fulltime">💼 Full-time</option>
-                    <option value="all">🌐 All Types</option>
+                    <option value="parttime">⏱️ Part-time</option>
                   </select>
                 </div>
               </div>
 
               <div class="form-group">
-                <label for="lab-description">Paste LinkedIn Post Text / Requirements (If copying text directly)</label>
-                <textarea id="lab-description" rows="3" placeholder="e.g. 'We are hiring a freelance LLM Engineer for our 15-person startup! DM me or email...'"></textarea>
+                <label for="lab-description">Job Description / Requirements / Notes (Optional)</label>
+                <textarea id="lab-description" rows="3" placeholder="e.g. Looking for a Python Developer experienced with FastAPI and LLMs to build agentic pipelines..."></textarea>
               </div>
 
               <div style="display:flex; justify-content:space-between; align-items:center; margin-top:0.5rem; flex-wrap:wrap; gap:0.5rem;">
                 <button type="submit" id="btn-run-lab" class="btn btn-primary btn-large">
                   <i data-lucide="sparkles"></i>
-                  <span>Scrape & Enrich LinkedIn Post</span>
+                  <span>Run Autonomous Agent Research</span>
                 </button>
                 <label class="checkbox-chip">
                   <input type="checkbox" id="lab-save-db" checked>
@@ -496,6 +508,214 @@
               <!-- Dynamic Result -->
             </div>
           </div>
+        </div>
+      </section>
+
+      <!-- TAB 4: EU Startups Explorer -->
+      <section id="tab-eu-startups" class="tab-panel">
+        <div class="eu-startups-container">
+          
+          <!-- EU Startups Hero Banner -->
+          <div class="glass-card eu-hero-banner">
+            <div class="eu-hero-top">
+              <div class="eu-hero-info">
+                <div class="eu-hero-title-group">
+                  <div class="eu-icon-glow">
+                    <i data-lucide="globe"></i>
+                  </div>
+                  <div>
+                    <div class="eu-badge-header">
+                      <h2>EU Startups Directory & Intelligence</h2>
+                      <span class="source-pill">SQLite Database</span>
+                    </div>
+                    <p class="card-subtitle">Search, filter, inspect and discover companies, founders, key executives, and contacts across Europe.</p>
+                  </div>
+                </div>
+              </div>
+
+              <div class="eu-clock-card">
+                <div class="clock-display">
+                  <i data-lucide="clock" class="clock-icon"></i>
+                  <span id="eu-clock">--:--:--</span>
+                </div>
+                <div id="eu-date" class="clock-date">Loading date...</div>
+              </div>
+            </div>
+
+            <!-- Mini Metrics Row -->
+            <div class="eu-metrics-row">
+              <div class="eu-metric-item">
+                <span class="eu-metric-label">Total Startups</span>
+                <span class="eu-metric-val" id="eu-stat-total">0</span>
+              </div>
+              <div class="eu-metric-item">
+                <span class="eu-metric-label">Countries</span>
+                <span class="eu-metric-val" id="eu-stat-countries">0</span>
+              </div>
+              <div class="eu-metric-item">
+                <span class="eu-metric-label">Categories</span>
+                <span class="eu-metric-val" id="eu-stat-categories">0</span>
+              </div>
+              <div class="eu-metric-item">
+                <span class="eu-metric-label">Key People</span>
+                <span class="eu-metric-val" id="eu-stat-people">0</span>
+              </div>
+              <div class="eu-metric-item">
+                <span class="eu-metric-label">Public Emails</span>
+                <span class="eu-metric-val" id="eu-stat-emails">0</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Advanced Filters Card -->
+          <div class="glass-card eu-filters-card">
+            <div class="eu-filter-row">
+              <div class="eu-filter-group search-field">
+                <label for="eu-search"><i data-lucide="search"></i> Search Everything</label>
+                <div class="input-with-icon">
+                  <i data-lucide="search"></i>
+                  <input type="text" id="eu-search" placeholder="Company, founder, CEO, CTO, email, tag...">
+                </div>
+              </div>
+              <div class="eu-filter-group">
+                <label for="eu-country"><i data-lucide="map-pin"></i> Country</label>
+                <select id="eu-country" class="custom-select filter-select">
+                  <option value="">All Countries</option>
+                </select>
+              </div>
+              <div class="eu-filter-group">
+                <label for="eu-state"><i data-lucide="map"></i> State / Region</label>
+                <select id="eu-state" class="custom-select filter-select">
+                  <option value="">All States</option>
+                </select>
+              </div>
+              <div class="eu-filter-group">
+                <label for="eu-city"><i data-lucide="building"></i> City</label>
+                <select id="eu-city" class="custom-select filter-select">
+                  <option value="">All Cities</option>
+                </select>
+              </div>
+              <div class="eu-filter-group">
+                <label for="eu-category"><i data-lucide="tag"></i> Category</label>
+                <select id="eu-category" class="custom-select filter-select">
+                  <option value="">All Categories</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="eu-filter-row">
+              <div class="eu-filter-group">
+                <label for="eu-role"><i data-lucide="user-check"></i> Person Role</label>
+                <select id="eu-role" class="custom-select filter-select">
+                  <option value="">All Roles</option>
+                </select>
+              </div>
+              <div class="eu-filter-group">
+                <label for="eu-founded-min"><i data-lucide="calendar"></i> Founded From</label>
+                <input type="number" id="eu-founded-min" placeholder="e.g. 2010" class="eu-input">
+              </div>
+              <div class="eu-filter-group">
+                <label for="eu-founded-max"><i data-lucide="calendar"></i> Founded To</label>
+                <input type="number" id="eu-founded-max" placeholder="e.g. 2026" class="eu-input">
+              </div>
+              <div class="eu-filter-group">
+                <label for="eu-has-website"><i data-lucide="globe"></i> Website</label>
+                <select id="eu-has-website" class="custom-select filter-select">
+                  <option value="">Any</option>
+                  <option value="yes">Has Website</option>
+                  <option value="no">No Website</option>
+                </select>
+              </div>
+              <div class="eu-filter-group">
+                <label for="eu-has-email"><i data-lucide="mail"></i> Public Email</label>
+                <select id="eu-has-email" class="custom-select filter-select">
+                  <option value="">Any</option>
+                  <option value="yes">Has Email</option>
+                  <option value="no">No Email</option>
+                </select>
+              </div>
+              <div class="eu-filter-actions">
+                <button id="eu-btn-reset" class="btn btn-secondary btn-sm" title="Reset all filters">
+                  <i data-lucide="rotate-ccw"></i>
+                  <span>Reset</span>
+                </button>
+                <button id="eu-btn-apply" class="btn btn-primary btn-sm" title="Apply filters">
+                  <i data-lucide="filter"></i>
+                  <span>Apply</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Startups Results Card -->
+          <div class="glass-card eu-results-card" id="eu-results-card">
+            <div class="eu-table-toolbar">
+              <div class="eu-result-meta" id="eu-result-info">Loading startups...</div>
+              <div class="eu-toolbar-controls">
+                <div class="eu-control-group">
+                  <label for="eu-sort">Sort:</label>
+                  <select id="eu-sort" class="custom-select sort-select">
+                    <option value="updated_at|desc">Recently Updated</option>
+                    <option value="created_at|desc">Newest Added</option>
+                    <option value="company_name|asc">Company (A → Z)</option>
+                    <option value="company_name|desc">Company (Z → A)</option>
+                    <option value="country|asc">Country (A → Z)</option>
+                    <option value="category|asc">Category (A → Z)</option>
+                    <option value="founded_year|desc">Newest Founded</option>
+                    <option value="founded_year|asc">Oldest Founded</option>
+                  </select>
+                </div>
+                <div class="eu-control-group">
+                  <label for="eu-per-page">Per Page:</label>
+                  <select id="eu-per-page" class="custom-select per-page-select">
+                    <option value="15">15</option>
+                    <option value="25" selected>25</option>
+                    <option value="50">50</option>
+                    <option value="100">100</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            <!-- Startups Table Wrap -->
+            <div class="eu-table-wrapper">
+              <table class="eu-startups-table">
+                <thead>
+                  <tr>
+                    <th>Company</th>
+                    <th>Location</th>
+                    <th>Category</th>
+                    <th>Founded</th>
+                    <th>Tags</th>
+                    <th>People &amp; Roles</th>
+                    <th>Contacts</th>
+                    <th>Sources</th>
+                  </tr>
+                </thead>
+                <tbody id="eu-table-body">
+                  <!-- Injected via JavaScript -->
+                </tbody>
+              </table>
+            </div>
+
+            <!-- Table Loading & Empty States -->
+            <div id="eu-loading-spinner" class="loading-state" style="display: none; padding: 40px;">
+              <div class="spinner"></div>
+              <span>Searching EU Startups database...</span>
+            </div>
+
+            <div id="eu-empty-state" class="empty-state" style="display: none; padding: 50px;">
+              <i data-lucide="inbox"></i>
+              <h3>No Startups Found</h3>
+              <p>No startups match your search query or applied filter parameters.</p>
+            </div>
+
+            <!-- Pagination Bar -->
+            <div class="eu-pagination-wrapper">
+              <div id="eu-pagination" class="eu-pagination"></div>
+            </div>
+          </div>
+
         </div>
       </section>
 

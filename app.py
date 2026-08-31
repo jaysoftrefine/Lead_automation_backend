@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.routes import router as api_router
+from api.eu_startups_routes import router as eu_startups_router
 from config.settings import settings
 from core.logging import logger
 from db.mongo import mongo_manager
@@ -42,6 +43,7 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 # Include API routes
 app.include_router(api_router)
+app.include_router(eu_startups_router)
 
 
 @app.on_event("startup")
@@ -68,6 +70,16 @@ async def serve_dashboard(request: Request):
     if index_path.exists():
         return FileResponse(str(index_path))
     return HTMLResponse("<h1>Lead Generation Engine</h1><p>Frontend template not found.</p>")
+
+
+@app.get("/eu-startups", response_class=HTMLResponse)
+@app.get("/startups", response_class=HTMLResponse)
+async def serve_eu_startups(request: Request):
+    """Direct route to the EU Startups Explorer section."""
+    index_path = TEMPLATES_DIR / "index.html"
+    if index_path.exists():
+        return FileResponse(str(index_path))
+    return HTMLResponse("<h1>EU Startups Explorer</h1><p>Template not found.</p>")
 
 
 if __name__ == "__main__":

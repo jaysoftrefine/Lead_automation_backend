@@ -114,6 +114,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
       if (targetTabId === "tab-leads") {
         fetchLeads();
+      } else if (targetTabId === "tab-eu-startups") {
+        loadEUStats();
+        loadEUOptions();
+        loadEUStartups(1);
       }
     });
   });
@@ -640,19 +644,20 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  // --- Direct LinkedIn Post & Single Job Scraper ---
+  // --- Instant Lead & Company Research Lab ---
   instantForm.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const url = document.getElementById("lab-url") ? document.getElementById("lab-url").value.trim() : "";
     const company = document.getElementById("lab-company") ? document.getElementById("lab-company").value.trim() : "";
     const title = document.getElementById("lab-title") ? document.getElementById("lab-title").value.trim() : "";
+    const location = document.getElementById("lab-location") ? document.getElementById("lab-location").value.trim() : "Remote";
+    const url = document.getElementById("lab-url") ? document.getElementById("lab-url").value.trim() : "";
     const size = document.getElementById("lab-size") ? document.getElementById("lab-size").value : "small";
-    const jobType = document.getElementById("lab-type") ? document.getElementById("lab-type").value : "contract";
+    const jobType = document.getElementById("lab-type") ? document.getElementById("lab-type").value : "all";
     const desc = document.getElementById("lab-description") ? document.getElementById("lab-description").value.trim() : "";
     const saveToDb = document.getElementById("lab-save-db") ? document.getElementById("lab-save-db").checked : true;
 
-    if (!url && !company && !desc) {
-      showToast("Please provide a LinkedIn URL, company name, or post text.", "error");
+    if (!company || !title) {
+      showToast("Please provide both Company Name and Job Title.", "error");
       return;
     }
 
@@ -660,17 +665,18 @@ document.addEventListener("DOMContentLoaded", () => {
     labLoading.style.display = "flex";
     labResultContent.style.display = "none";
     btnRunLab.disabled = true;
-    btnRunLab.innerHTML = `<div class="spinner" style="width: 16px; height: 16px; border-width: 2px;"></div> Scrapiing & Researching...`;
+    btnRunLab.innerHTML = `<div class="spinner" style="width: 16px; height: 16px; border-width: 2px;"></div> Researching & Enriching...`;
 
     try {
-      const res = await fetch(`${API_BASE}/api/scrape/linkedin-post`, {
+      const res = await fetch(`${API_BASE}/api/pipeline/test-enrichment`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          url: url || null,
-          raw_text: desc || null,
-          company: company || null,
-          title: title || null,
+          company: company,
+          title: title,
+          location: location || "Remote",
+          job_url: url || null,
+          job_description: desc || null,
           target_company_size: size,
           target_job_type: jobType,
           save_to_db: saveToDb,
@@ -678,7 +684,7 @@ document.addEventListener("DOMContentLoaded", () => {
       });
 
       const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || "Agent research on LinkedIn post failed");
+      if (!res.ok) throw new Error(data.detail || "Agent research on company failed");
 
       labLoading.style.display = "none";
       labResultContent.style.display = "block";
@@ -689,14 +695,14 @@ document.addEventListener("DOMContentLoaded", () => {
       labResultContent.innerHTML = `
         <div style="background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.3); border-radius: var(--radius-md); padding: 1rem; margin-bottom: 1rem;">
           <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem; margin-bottom:0.4rem;">
-            <h3 style="color: #34d399; font-size: 1rem; margin: 0;">✓ Scraped: ${escapeHtml(lead.company)} - ${escapeHtml(lead.title)}</h3>
+            <h3 style="color: #34d399; font-size: 1rem; margin: 0;">✓ Enriched: ${escapeHtml(lead.company)} - ${escapeHtml(lead.title)}</h3>
             <span class="lead-score-pill score-high">${lead.relevance_score}/100 Score</span>
           </div>
           <p style="font-size: 0.85rem; color: #cbd5e1; margin-bottom: 0.5rem;">${escapeHtml(lead.lead_summary || lead.company_summary || '')}</p>
           <div style="display: flex; gap: 6px; flex-wrap: wrap;">
             <span class="lead-meta-pill"><i data-lucide="building-2"></i> ${escapeHtml(lead.company_size || 'Small')}</span>
             <span class="lead-meta-pill"><i data-lucide="briefcase"></i> ${escapeHtml(lead.job_type || 'Contract')}</span>
-            ${lead.job_url ? `<a href="${escapeHtml(lead.job_url)}" target="_blank" class="lead-meta-pill platform-link-pill"><i data-lucide="external-link"></i> Original Post Link</a>` : ''}
+            ${lead.job_url ? `<a href="${escapeHtml(lead.job_url)}" target="_blank" class="lead-meta-pill platform-link-pill"><i data-lucide="external-link"></i> Link</a>` : ''}
           </div>
         </div>
 
@@ -714,7 +720,7 @@ document.addEventListener("DOMContentLoaded", () => {
               </div>
               <div style="display:flex; gap:6px;">
                 ${c.email ? `<button class="btn-copy-email" onclick="window.copyToClipboard('${c.email}', this)"><i data-lucide="copy" style="width:12px;height:12px;"></i> Copy</button>` : ''}
-                ${c.linkedin_url ? `<a href="${c.linkedin_url}" target="_blank" class="btn btn-secondary btn-sm" title="View LinkedIn Profile">LinkedIn</a>` : ''}
+                ${c.linkedin_url ? `<a href="${c.linkedin_url}" target="_blank" class="btn btn-secondary btn-sm" title="View Profile">LinkedIn Profile</a>` : ''}
               </div>
             </div>
           `).join('') || '<p class="text-muted">No individual direct contacts found. Domain: ' + escapeHtml(lead.company_domain || 'N/A') + '</p>'}
@@ -736,7 +742,7 @@ document.addEventListener("DOMContentLoaded", () => {
       showToast(err.message, "error");
     } finally {
       btnRunLab.disabled = false;
-      btnRunLab.innerHTML = `<i data-lucide="sparkles"></i><span>Scrape & Enrich LinkedIn Post</span>`;
+      btnRunLab.innerHTML = `<i data-lucide="sparkles"></i><span>Run Autonomous Agent Research</span>`;
       if (window.lucide) lucide.createIcons();
     }
   });
@@ -787,8 +793,296 @@ document.addEventListener("DOMContentLoaded", () => {
     };
   }
 
+  // ============================================================
+  // EU STARTUPS EXPLORER & INTELLIGENCE
+  // ============================================================
+  const euClock = document.getElementById("eu-clock");
+  const euDate = document.getElementById("eu-date");
+  const euStatTotal = document.getElementById("eu-stat-total");
+  const euStatCountries = document.getElementById("eu-stat-countries");
+  const euStatCategories = document.getElementById("eu-stat-categories");
+  const euStatPeople = document.getElementById("eu-stat-people");
+  const euStatEmails = document.getElementById("eu-stat-emails");
+  const euStartupsBadge = document.getElementById("eu-startups-badge");
+
+  const euSearch = document.getElementById("eu-search");
+  const euCountry = document.getElementById("eu-country");
+  const euState = document.getElementById("eu-state");
+  const euCity = document.getElementById("eu-city");
+  const euCategory = document.getElementById("eu-category");
+  const euRole = document.getElementById("eu-role");
+  const euFoundedMin = document.getElementById("eu-founded-min");
+  const euFoundedMax = document.getElementById("eu-founded-max");
+  const euHasWebsite = document.getElementById("eu-has-website");
+  const euHasEmail = document.getElementById("eu-has-email");
+  const euSort = document.getElementById("eu-sort");
+  const euPerPage = document.getElementById("eu-per-page");
+  const euBtnReset = document.getElementById("eu-btn-reset");
+  const euBtnApply = document.getElementById("eu-btn-apply");
+
+  const euTableBody = document.getElementById("eu-table-body");
+  const euPagination = document.getElementById("eu-pagination");
+  const euLoadingSpinner = document.getElementById("eu-loading-spinner");
+  const euEmptyState = document.getElementById("eu-empty-state");
+  const euResultInfo = document.getElementById("eu-result-info");
+
+  let euCurrentPage = 1;
+  let euOptionsLoaded = false;
+
+  function updateEUClock() {
+    if (!euClock || !euDate) return;
+    const now = new Date();
+    euClock.textContent = now.toLocaleTimeString();
+    euDate.textContent = now.toLocaleDateString(undefined, {
+      weekday: "short",
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+    });
+  }
+  setInterval(updateEUClock, 1000);
+  updateEUClock();
+
+  async function loadEUStats() {
+    try {
+      const res = await fetch(`${API_BASE}/api/eu-startups/stats`);
+      if (!res.ok) throw new Error("Failed to fetch EU Startups stats");
+      const d = await res.json();
+      if (euStatTotal) euStatTotal.textContent = (d.total || 0).toLocaleString();
+      if (euStatCountries) euStatCountries.textContent = (d.countries || 0).toLocaleString();
+      if (euStatCategories) euStatCategories.textContent = (d.categories || 0).toLocaleString();
+      if (euStatPeople) euStatPeople.textContent = (d.people || 0).toLocaleString();
+      if (euStatEmails) euStatEmails.textContent = (d.emails || 0).toLocaleString();
+      if (euStartupsBadge) euStartupsBadge.textContent = (d.total || 0).toLocaleString();
+    } catch (err) {
+      console.warn("Could not load EU Startups stats:", err);
+    }
+  }
+
+  async function loadEUOptions() {
+    if (euOptionsLoaded) return;
+    try {
+      const res = await fetch(`${API_BASE}/api/eu-startups/options`);
+      if (!res.ok) throw new Error("Failed to fetch EU Startups filter options");
+      const d = await res.json();
+
+      fillEUSelect(euCountry, d.countries || [], "All Countries");
+      fillEUSelect(euState, d.states || [], "All States");
+      fillEUSelect(euCity, d.cities || [], "All Cities");
+      fillEUSelect(euCategory, d.categories || [], "All Categories");
+      fillEUSelect(euRole, d.roles || [], "All Roles");
+
+      euOptionsLoaded = true;
+    } catch (err) {
+      console.warn("Could not load EU Startups options:", err);
+    }
+  }
+
+  function fillEUSelect(selectEl, values, defaultLabel) {
+    if (!selectEl) return;
+    const currentVal = selectEl.value;
+    let html = `<option value="">${escapeHtml(defaultLabel)}</option>`;
+    values.forEach(v => {
+      html += `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`;
+    });
+    selectEl.innerHTML = html;
+    if (currentVal) selectEl.value = currentVal;
+  }
+
+  function getEUParams(page = 1) {
+    const [sort, direction] = (euSort ? euSort.value : "updated_at|desc").split("|");
+    const perPage = euPerPage ? parseInt(euPerPage.value, 10) || 25 : 25;
+    return new URLSearchParams({
+      page: page,
+      per_page: perPage,
+      search: (euSearch ? euSearch.value : "").trim(),
+      country: euCountry ? euCountry.value : "",
+      state: euState ? euState.value : "",
+      city: euCity ? euCity.value : "",
+      category: euCategory ? euCategory.value : "",
+      role: euRole ? euRole.value : "",
+      founded_min: euFoundedMin ? euFoundedMin.value.trim() : "",
+      founded_max: euFoundedMax ? euFoundedMax.value.trim() : "",
+      has_website: euHasWebsite ? euHasWebsite.value : "",
+      has_email: euHasEmail ? euHasEmail.value : "",
+      sort: sort || "updated_at",
+      direction: direction || "desc",
+    });
+  }
+
+  window.loadEUStartups = async function(page = 1) {
+    euCurrentPage = page;
+    if (euLoadingSpinner) euLoadingSpinner.style.display = "flex";
+    if (euEmptyState) euEmptyState.style.display = "none";
+    if (euTableBody) euTableBody.innerHTML = "";
+
+    try {
+      const res = await fetch(`${API_BASE}/api/eu-startups/startups?` + getEUParams(page));
+      if (!res.ok) throw new Error("Failed to load startups");
+      const d = await res.json();
+
+      if (euResultInfo) {
+        euResultInfo.textContent = `${(d.total || 0).toLocaleString()} result${d.total === 1 ? "" : "s"} • Page ${d.page} of ${Math.max(d.pages || 1, 1)}`;
+      }
+
+      if (!d.data || d.data.length === 0) {
+        if (euEmptyState) euEmptyState.style.display = "block";
+        if (euPagination) euPagination.innerHTML = "";
+      } else {
+        renderEURows(d.data);
+        renderEUPagination(d.page, d.pages);
+      }
+    } catch (err) {
+      if (euTableBody) {
+        euTableBody.innerHTML = `<tr><td colspan="8" style="text-align:center; padding: 40px; color: #fb7185;">Error loading startups: ${escapeHtml(err.message)}</td></tr>`;
+      }
+    } finally {
+      if (euLoadingSpinner) euLoadingSpinner.style.display = "none";
+      if (window.lucide) lucide.createIcons();
+    }
+  };
+
+  function renderEURows(rows) {
+    if (!euTableBody) return;
+    euTableBody.innerHTML = rows.map(s => {
+      const peopleList = (s.people || []).map(p => `
+        <div class="eu-person-block">
+          <div class="eu-person-title">${escapeHtml(p.name || "Public Contact")}</div>
+          ${p.role ? `<div class="eu-person-subrole">${escapeHtml(p.role)}</div>` : ""}
+          ${p.email ? `<div class="eu-person-mail">✉ ${escapeHtml(p.email)}</div>` : ""}
+          ${p.linkedin ? `<a href="${escapeHtml(p.linkedin)}" target="_blank" rel="noopener noreferrer" class="eu-person-linkedin"><i data-lucide="linkedin" style="width:12px;height:12px;"></i> LinkedIn</a>` : ""}
+        </div>
+      `).join("");
+
+      const tagsList = s.tags ? s.tags.split(",").map(t => t.trim()).filter(Boolean).map(t => `
+        <span class="eu-tag-pill">${escapeHtml(t)}</span>
+      `).join(" ") : "—";
+
+      return `
+        <tr>
+          <td>
+            <div class="eu-company-name">
+              ${s.website
+                ? `<a href="${escapeHtml(s.website)}" target="_blank" rel="noopener noreferrer">${escapeHtml(s.company_name || "Unnamed Startup")}</a>`
+                : escapeHtml(s.company_name || "Unnamed Startup")}
+            </div>
+            <div class="eu-company-desc">
+              ${escapeHtml((s.description || "").slice(0, 160))}${(s.description && s.description.length > 160) ? "..." : ""}
+            </div>
+          </td>
+          <td>
+            <div>${escapeHtml(s.city || "—")}</div>
+            ${s.state ? `<div style="font-size:0.75rem; color:var(--text-muted);">${escapeHtml(s.state)}</div>` : ""}
+            <span class="eu-location-badge">${escapeHtml(s.country || "Europe")}</span>
+          </td>
+          <td>
+            ${s.category ? `<span class="eu-cat-badge">${escapeHtml(s.category)}</span>` : "—"}
+          </td>
+          <td>
+            <span style="font-family:var(--font-mono); font-weight:600;">${escapeHtml(s.founded_year || "—")}</span>
+          </td>
+          <td class="eu-tag-text">
+            ${tagsList}
+          </td>
+          <td style="min-width: 170px;">
+            ${peopleList || `<span style="color:var(--text-muted); font-size:0.78rem;">No contacts found</span>`}
+          </td>
+          <td>
+            <div class="eu-count-badge">${s.email_count || 0} emails</div>
+            <div style="font-size:0.75rem; color:var(--text-muted);">${s.people_count || 0} people</div>
+          </td>
+          <td>
+            ${s.eu_startups_url ? `<a href="${escapeHtml(s.eu_startups_url)}" target="_blank" rel="noopener noreferrer" class="eu-link-action"><i data-lucide="external-link" style="width:12px;height:12px;"></i> EU-Startups</a><br>` : ""}
+            ${s.website ? `<a href="${escapeHtml(s.website)}" target="_blank" rel="noopener noreferrer" class="eu-link-action"><i data-lucide="globe" style="width:12px;height:12px;"></i> Website</a>` : ""}
+          </td>
+        </tr>
+      `;
+    }).join("");
+  }
+
+  function renderEUPagination(page, pages) {
+    if (!euPagination) return;
+    if (pages <= 1) {
+      euPagination.innerHTML = "";
+      return;
+    }
+
+    let html = "";
+    const start = Math.max(1, page - 2);
+    const end = Math.min(pages, page + 2);
+
+    if (page > 1) {
+      html += `<button class="eu-page-btn" onclick="window.loadEUStartups(${page - 1})" title="Previous Page">‹</button>`;
+    }
+    if (start > 1) {
+      html += `<button class="eu-page-btn" onclick="window.loadEUStartups(1)">1</button>`;
+    }
+    if (start > 2) {
+      html += `<span class="eu-page-ellipsis">…</span>`;
+    }
+
+    for (let i = start; i <= end; i++) {
+      html += `<button class="eu-page-btn ${i === page ? "active" : ""}" onclick="window.loadEUStartups(${i})">${i}</button>`;
+    }
+
+    if (end < pages - 1) {
+      html += `<span class="eu-page-ellipsis">…</span>`;
+    }
+    if (end < pages) {
+      html += `<button class="eu-page-btn" onclick="window.loadEUStartups(${pages})">${pages}</button>`;
+    }
+    if (page < pages) {
+      html += `<button class="eu-page-btn" onclick="window.loadEUStartups(${page + 1})" title="Next Page">›</button>`;
+    }
+
+    euPagination.innerHTML = html;
+  }
+
+  function resetEUFilters() {
+    if (euSearch) euSearch.value = "";
+    if (euFoundedMin) euFoundedMin.value = "";
+    if (euFoundedMax) euFoundedMax.value = "";
+    if (euCountry) euCountry.value = "";
+    if (euState) euState.value = "";
+    if (euCity) euCity.value = "";
+    if (euCategory) euCategory.value = "";
+    if (euRole) euRole.value = "";
+    if (euHasWebsite) euHasWebsite.value = "";
+    if (euHasEmail) euHasEmail.value = "";
+    if (euSort) euSort.value = "updated_at|desc";
+    window.loadEUStartups(1);
+  }
+
+  if (euBtnApply) euBtnApply.addEventListener("click", () => window.loadEUStartups(1));
+  if (euBtnReset) euBtnReset.addEventListener("click", resetEUFilters);
+  if (euSearch) {
+    euSearch.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        window.loadEUStartups(1);
+      }
+    });
+  }
+  if (euSort) euSort.addEventListener("change", () => window.loadEUStartups(1));
+  if (euPerPage) euPerPage.addEventListener("change", () => window.loadEUStartups(1));
+  if (euCountry) euCountry.addEventListener("change", () => window.loadEUStartups(1));
+  if (euCategory) euCategory.addEventListener("change", () => window.loadEUStartups(1));
+  if (euHasWebsite) euHasWebsite.addEventListener("change", () => window.loadEUStartups(1));
+  if (euHasEmail) euHasEmail.addEventListener("change", () => window.loadEUStartups(1));
+
   // --- Initial Load ---
   fetchStats();
   fetchLeads();
+  loadEUStats();
   pollPipelineStatus(); // Resume polling if a task was already in progress
+
+  // Check if directed directly to EU Startups
+  if (
+    window.location.pathname.includes("eu-startups") ||
+    window.location.pathname.includes("startups") ||
+    window.location.hash === "#eu-startups"
+  ) {
+    const euTabBtn = document.querySelector('[data-tab="tab-eu-startups"]');
+    if (euTabBtn) euTabBtn.click();
+  }
 });

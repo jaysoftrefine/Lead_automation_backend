@@ -76,23 +76,6 @@ class Settings(BaseSettings):
         alias="TAVILY_API_KEY"
     )
 
-    # LinkedIn Account Credentials (for Post & Activity Scraping)
-    linkedin_email: Optional[str] = Field(
-        default=None,
-        description="LinkedIn account email / username",
-        alias="LINKEDIN_EMAIL"
-    )
-    linkedin_password: Optional[str] = Field(
-        default=None,
-        description="LinkedIn account password",
-        alias="LINKEDIN_PASSWORD"
-    )
-    linkedin_li_at_cookie: Optional[str] = Field(
-        default=None,
-        description="Optional LinkedIn 'li_at' session cookie for 2FA bypass",
-        alias="LINKEDIN_LI_AT"
-    )
-
     # Pipeline Defaults
     max_search_results_per_lead: int = Field(
         default=5,

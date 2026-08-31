@@ -115,17 +115,8 @@ class TestEnrichmentRequest(BaseModel):
     location: Optional[str] = Field("Remote")
     job_description: Optional[str] = Field(None)
     job_url: Optional[str] = Field(None)
-    provider: Optional[str] = Field(None)
-    model: Optional[str] = Field(None)
-
-
-class ScrapeLinkedInPostRequest(BaseModel):
-    url: Optional[str] = Field(None, example="https://www.linkedin.com/posts/...")
-    raw_text: Optional[str] = Field(None, example="We are hiring a freelance AI engineer...")
-    company: Optional[str] = Field(None, example="StartupX")
-    title: Optional[str] = Field(None, example="Senior AI Engineer")
-    target_company_size: str = Field("small", example="small")
-    target_job_type: str = Field("contract", example="contract")
+    target_company_size: Optional[str] = Field("small")
+    target_job_type: Optional[str] = Field("all")
     provider: Optional[str] = Field(None)
     model: Optional[str] = Field(None)
     save_to_db: bool = Field(True)
@@ -172,44 +163,17 @@ def _execute_pipeline_task(req: RunPipelineRequest):
         # Scrape a sufficiently wide pool of raw candidate listings to satisfy the qualified goal
         raw_to_fetch = min(max(target_goal * 3, 20), 80)
         
-        # 1. Scrape Job Boards (JobSpy) - ONLY if job board platforms are selected
-        job_board_sites = [s for s in req.sites if "post" not in s.lower()]
-        raw_postings = []
-        if job_board_sites:
-            pipeline_state.add_log(f"📡 [1/2] Scraping candidate jobs from {', '.join(job_board_sites)} in '{req.location}' (Remote: {req.is_remote})...", "info")
-            raw_postings = orchestrator.scraper.scrape(
-                search_term=effective_search_term,
-                location=req.location,
-                results_wanted=raw_to_fetch,
-                hours_old=req.hours_old,
-                sites=job_board_sites,
-                job_type=detected_job_type,
-                is_remote=req.is_remote,
-            )
-        else:
-            pipeline_state.add_log("ℹ️ Structured Job Boards unchecked (Posts Only mode).", "info")
-
-        # 2. Scrape LinkedIn Organic Feed Posts
-        feed_posts = []
-        if any("post" in s.lower() for s in req.sites):
-            try:
-                from scraper.linkedin_feed_scraper import linkedin_feed_scraper
-                if linkedin_feed_scraper.is_configured():
-                    pipeline_state.add_log("💬 [LinkedIn Feed] Searching organic 'we are hiring' posts from founders & leaders...", "info")
-                    feed_posts = linkedin_feed_scraper.search_hiring_posts(
-                        search_term=effective_search_term,
-                        limit=min(target_goal, 15),
-                        job_type=detected_job_type,
-                    )
-                    if feed_posts:
-                        pipeline_state.add_log(f"📥 Discovered {len(feed_posts)} organic LinkedIn hiring posts!", "success")
-                else:
-                    pipeline_state.add_log("ℹ️ LinkedIn credentials not fully initialized. Paste specific post URLs into Tab 3 for instant scraping.", "info")
-            except Exception as feed_err:
-                logger.warning(f"LinkedIn feed post scraping note: {feed_err}")
-
-        # Combine organic posts with structured job listings
-        raw_postings = feed_posts + raw_postings
+        # 1. Scrape Job Boards (JobSpy)
+        pipeline_state.add_log(f"📡 Scraping candidate jobs from {', '.join(req.sites)} in '{req.location}' (Remote: {req.is_remote})...", "info")
+        raw_postings = orchestrator.scraper.scrape(
+            search_term=effective_search_term,
+            location=req.location,
+            results_wanted=raw_to_fetch,
+            hours_old=req.hours_old,
+            sites=req.sites,
+            job_type=detected_job_type,
+            is_remote=req.is_remote,
+        )
 
         unique_comps = sorted(list({p.company.strip() for p in raw_postings if p.company and p.company.strip()}))
         metrics = PipelineMetrics(
@@ -663,55 +627,6 @@ def stop_pipeline():
     return {"success": True, "message": "Stop requested."}
 
 
-@router.post("/scrape/linkedin-post")
-def scrape_linkedin_post_endpoint(req: ScrapeLinkedInPostRequest):
-    """Scrapes a LinkedIn post/job URL or raw text, extracts details, enriches with leadership contacts & verified emails, and saves to MongoDB."""
-    try:
-        from scraper.linkedin_post_scraper import linkedin_post_scraper
-        
-        parsed = linkedin_post_scraper.scrape_url_or_text(
-            url=req.url,
-            raw_text=req.raw_text,
-            company_hint=req.company,
-            title_hint=req.title,
-        )
-
-        job_posting = RawJobPosting(
-            title=parsed["title"],
-            company=parsed["company"],
-            location=parsed["location"],
-            job_url=parsed["job_url"],
-            site=parsed["site"],
-            description=parsed["description"],
-            job_type=req.target_job_type if req.target_job_type != "all" else "Contract",
-        )
-
-        agent = LeadEnrichmentAgent(
-            provider_name=req.provider or settings.default_llm_provider,
-            model_name=req.model,
-        )
-
-        enriched_lead: EnrichedLead = agent.enrich_job(
-            job_posting,
-            target_company_size=req.target_company_size,
-            target_job_type=req.target_job_type,
-        )
-
-        if req.save_to_db:
-            mongo_manager.connect()
-            mongo_manager.upsert_enriched_lead(enriched_lead)
-
-        return {
-            "success": True,
-            "parsed_post": parsed,
-            "lead": enriched_lead.model_dump(mode="json"),
-            "saved_to_db": req.save_to_db,
-        }
-    except Exception as e:
-        logger.error(f"Error scraping LinkedIn post: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 @router.post("/pipeline/test-enrichment")
 def test_enrichment_direct(req: TestEnrichmentRequest):
     """Directly test the autonomous LLM thinking agent & Tavily research on a single custom job without scraping."""
@@ -730,14 +645,19 @@ def test_enrichment_direct(req: TestEnrichmentRequest):
             model_name=req.model,
         )
 
-        lead: EnrichedLead = agent.enrich_job(sample_job)
+        lead: EnrichedLead = agent.enrich_job(
+            sample_job,
+            target_company_size=req.target_company_size or "small",
+            target_job_type=req.target_job_type or "all",
+        )
 
-        # Save to DB
-        try:
-            mongo_manager.connect()
-            mongo_manager.upsert_enriched_lead(lead)
-        except Exception as db_err:
-            logger.warning(f"Could not persist test lead to Mongo: {db_err}")
+        # Save to DB if requested
+        if req.save_to_db:
+            try:
+                mongo_manager.connect()
+                mongo_manager.upsert_enriched_lead(lead)
+            except Exception as db_err:
+                logger.warning(f"Could not persist test lead to Mongo: {db_err}")
 
         lead_dict = lead.model_dump()
         lead_dict["created_at"] = lead.created_at.isoformat()

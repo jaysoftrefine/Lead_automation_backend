@@ -28,3 +28,9 @@ uvicorn>=0.29.0
 
 # LinkedIn Feed API
 linkedin-api>=2.3.1
+
+# EU Startups Explorer & Scraper
+beautifulsoup4>=4.12.2
+curl-cffi>=0.5.9
+google-genai>=0.1.0
+
