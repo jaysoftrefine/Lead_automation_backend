@@ -245,6 +245,7 @@ def get_eu_startups(
                 s.founded_year,
                 s.category,
                 s.tags,
+                s.company_linkedin,
                 s.created_at,
                 s.updated_at,
                 (
@@ -297,3 +298,29 @@ def get_eu_startups(
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to query EU Startups: {str(e)}")
+
+
+@router.post("/enrich")
+def trigger_enrichment(
+    limit: int = Query(10, ge=1, le=100, description="Number of startups to enrich"),
+    startup_id: Optional[int] = Query(None, description="Enrich specific startup ID"),
+) -> Dict[str, Any]:
+    """Trigger background or inline lead enrichment for EU startups."""
+    try:
+        from eu_startups.enrich import run_enrichment, enrich_startup, get_connection
+        conn = get_connection()
+        if startup_id:
+            row = conn.cursor().execute("SELECT * FROM startups WHERE id = ?", (startup_id,)).fetchone()
+            if not row:
+                conn.close()
+                raise HTTPException(status_code=404, detail="Startup not found")
+            success = enrich_startup(conn, row)
+            conn.close()
+            return {"status": "success", "enriched": 1 if success else 0, "startup_id": startup_id}
+        else:
+            run_enrichment(limit=limit)
+            conn.close()
+            return {"status": "success", "limit": limit}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Enrichment error: {str(e)}")
+

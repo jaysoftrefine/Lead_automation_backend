@@ -1,21 +1,46 @@
+"""EU Startups Lead Intelligence & Founder Enrichment Engine.
+
+High-precision discovery of verified Founders, Co-Founders, CEOs, direct founder emails,
+personal LinkedIn profiles (/in/), and official company channels.
+"""
+
 import os
 import json
 import re
 import sqlite3
 import time
-from typing import Optional
+from pathlib import Path
+from typing import Optional, Dict, Any, List, Set, Tuple
+from urllib.parse import urlparse
 
-from tavily import TavilyClient
+from bs4 import BeautifulSoup
+from curl_cffi import requests
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
+try:
+    from tavily import TavilyClient
+except ImportError:
+    TavilyClient = None
+
+try:
+    from duckduckgo_search import DDGS
+except ImportError:
+    try:
+        from ddgs import DDGS
+    except ImportError:
+        DDGS = None
+
 from google import genai
 
-
 # ============================================================
-# CONFIG
+# CONFIGURATION
 # ============================================================
 
-from pathlib import Path
-
-# Locate database path
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DATA_DB_PATH = ROOT_DIR / "data" / "eu_startups.db"
 LOCAL_DB_PATH = Path(__file__).resolve().parent / "eu_startups.db"
@@ -27,929 +52,607 @@ elif LOCAL_DB_PATH.exists():
 else:
     DB_PATH = str(DATA_DB_PATH)
 
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass
-
 GEMINI_API_KEY = (
     os.environ.get("GOOGLE_API_KEY")
     or os.environ.get("GEMINI_API_KEY")
 )
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
-
-GEMINI_MODEL = "gemini-3.5-flash"
-
-# TEST MODE:
-# Only process the first 2 incomplete startups
-LIMIT = 2
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
 
 MAX_SEARCH_RESULTS = 5
-SLEEP_BETWEEN_COMPANIES = 1
-
-
-# ============================================================
-# API CLIENTS
-# ============================================================
+SLEEP_BETWEEN_COMPANIES = 0.5
+REQUEST_TIMEOUT = 6
 
 if not GEMINI_API_KEY:
-    raise ValueError(
-        "GEMINI_API_KEY environment variable is missing"
-    )
+    raise ValueError("GOOGLE_API_KEY or GEMINI_API_KEY environment variable is missing")
 
-if not TAVILY_API_KEY:
-    raise ValueError(
-        "TAVILY_API_KEY environment variable is missing"
-    )
+gemini = genai.Client(api_key=GEMINI_API_KEY)
+tavily_client = TavilyClient(api_key=TAVILY_API_KEY) if (TavilyClient and TAVILY_API_KEY) else None
 
-gemini = genai.Client(
-    api_key=GEMINI_API_KEY
-)
+session = requests.Session(impersonate="chrome")
 
-tavily = TavilyClient(
-    api_key=TAVILY_API_KEY
-)
-
-
-# ============================================================
-# DATABASE
-# ============================================================
-
-def get_connection():
-    return sqlite3.connect(DB_PATH)
-
-
-def get_columns(conn):
-    cursor = conn.cursor()
-
-    cursor.execute("PRAGMA table_info(startups)")
-
-    return [
-        row[1]
-        for row in cursor.fetchall()
-    ]
-
-
-def table_exists(conn, table_name):
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        SELECT 1
-        FROM sqlite_master
-        WHERE type = 'table' AND name = ?
-        """,
-        (table_name,),
-    )
-    return cursor.fetchone() is not None
-
-
-def find_column(columns, possible_names):
-    """
-    Finds a database column using multiple possible names.
-    """
-
-    normalized = {
-        column.lower()
-        .replace("_", "")
-        .replace(" ", ""): column
-        for column in columns
-    }
-
-    for name in possible_names:
-
-        key = (
-            name.lower()
-            .replace("_", "")
-            .replace(" ", "")
-        )
-
-        if key in normalized:
-            return normalized[key]
-
-    return None
-
+GENERIC_EMAIL_PREFIXES = {
+    "info", "support", "hello", "contact", "sales", "team", "help", 
+    "press", "admin", "billing", "inquiries", "mail", "general",
+    "careers", "jobs", "office", "privacy", "security", "legal"
+}
 
 # ============================================================
 # HELPERS
 # ============================================================
 
-def is_empty(value):
-
-    if value is None:
-        return True
-
-    if isinstance(value, str):
-        return not value.strip()
-
-    return False
+def get_connection() -> sqlite3.Connection:
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 
-def clean_json_response(text):
-
+def clean_json_response(text: str) -> str:
     text = text.strip()
-
-    # Remove ```json ... ```
     if text.startswith("```"):
-
-        text = re.sub(
-            r"^```(?:json)?",
-            "",
-            text,
-            flags=re.IGNORECASE
-        )
-
-        text = re.sub(
-            r"```$",
-            "",
-            text
-        )
-
+        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s*```$", "", text)
     return text.strip()
 
 
+def is_affiliate_or_blocked_url(url: Optional[str]) -> bool:
+    if not url:
+        return True
+    url_lower = url.lower()
+    blocked = [
+        "imp.i384100.net",
+        "impact.com",
+        "eu-startups.com",
+        "facebook.com",
+        "instagram.com",
+        "twitter.com",
+        "x.com",
+        "tiktok.com",
+        "pinterest.com",
+        "google.com",
+        "feedburner.com",
+        "yoast.com",
+    ]
+    return any(b in url_lower for b in blocked)
+
+
+def clean_linkedin_url(url: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
+    """Returns (personal_linkedin_in_url, company_linkedin_url)."""
+    if not url or not isinstance(url, str):
+        return None, None
+    url = url.strip()
+    if "/in/" in url:
+        return url, None
+    elif "/company/" in url or "/school/" in url:
+        return None, url
+    return None, None
+
+
+def is_generic_email(email: Optional[str]) -> bool:
+    if not email:
+        return True
+    local_part = email.split("@")[0].lower()
+    return local_part in GENERIC_EMAIL_PREFIXES
+
+
 # ============================================================
-# TAVILY SEARCH
+# DIRECTORY & WEBSITE PROBING
 # ============================================================
 
-def search_company(
-    company_name: str,
-    website: Optional[str] = None
-):
+def scrape_eu_startups_directory_entry(eu_url: Optional[str]) -> Dict[str, Any]:
+    """Extract official company website, LinkedIn company URL, and description from directory."""
+    if not eu_url or not eu_url.startswith("http"):
+        return {"website": None, "company_linkedin": None, "description": None, "text": ""}
+    
+    try:
+        res = session.get(eu_url, timeout=REQUEST_TIMEOUT)
+        if res.status_code != 200 or not res.text:
+            return {"website": None, "company_linkedin": None, "description": None, "text": ""}
+        
+        soup = BeautifulSoup(res.text, "html.parser")
+        listing = soup.select_one(".wpbdp-listing") or soup
+
+        real_website = None
+        company_linkedin = None
+
+        for a in listing.select("a[href]"):
+            href = a["href"].strip()
+            if not href.startswith("http"):
+                continue
+            if "linkedin.com/company" in href and not company_linkedin:
+                company_linkedin = href
+            elif not is_affiliate_or_blocked_url(href) and not real_website:
+                real_website = href
+
+        full_text = " ".join(listing.get_text(" \n ", strip=True).split())
+        if not real_website or not company_linkedin:
+            raw_urls = re.findall(r"https?://[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}[^\s\"\'<>]*", full_text)
+            for u in raw_urls:
+                u_clean = u.rstrip("/.,;:)")
+                if "linkedin.com/company" in u_clean and not company_linkedin:
+                    company_linkedin = u_clean
+                elif not is_affiliate_or_blocked_url(u_clean) and not real_website:
+                    real_website = u_clean
+
+        desc_node = listing.select_one(".wpbdp-field-long_business_description, .wpbdp-field-business_description")
+        desc = desc_node.get_text(" ", strip=True) if desc_node else ""
+
+        return {
+            "website": real_website,
+            "company_linkedin": company_linkedin,
+            "description": desc,
+            "text": full_text[:2500],
+        }
+    except Exception:
+        return {"website": None, "company_linkedin": None, "description": None, "text": ""}
+
+
+def probe_company_website(company_name: str, candidate_website: Optional[str]) -> Dict[str, Any]:
+    """Fetch website homepage and subpages (/about, /team, /contact, /impressum) for emails & personal LinkedIn."""
+    target_url = None
+    if candidate_website and not is_affiliate_or_blocked_url(candidate_website):
+        target_url = candidate_website
+    else:
+        match = re.search(r"([a-zA-Z0-9-]+\.(?:ai|app|io|com|eu|de|uk|fr|nl|es|tech|co|net|org))\b", company_name, re.I)
+        if match:
+            target_url = f"https://{match.group(1)}"
+        else:
+            slug = re.sub(r"[^a-zA-Z0-9]", "", company_name.lower())
+            if slug:
+                target_url = f"https://{slug}.com"
+
+    if not target_url:
+        return {"website": None, "emails": set(), "personal_linkedins": set(), "company_linkedin": None, "text_snippets": []}
+
+    emails: Set[str] = set()
+    personal_linkedins: Set[str] = set()
+    company_linkedin = None
+    snippets: List[str] = []
+    main_html = None
+
+    try:
+        res = session.get(target_url, timeout=REQUEST_TIMEOUT, headers={"Accept-Language": "en-US,en;q=0.9"})
+        if res.status_code == 200 and res.text:
+            main_html = res.text
+            soup = BeautifulSoup(main_html, "html.parser")
+            title = soup.title.string.strip() if soup.title and soup.title.string else ""
+            raw_text = " ".join(soup.get_text(" ", strip=True).split())
+            snippets.append(f"Homepage ({target_url}) Title: {title}\nText: {raw_text[:2000]}")
+
+            for a in soup.select("a[href*='linkedin.com']"):
+                href = a["href"].strip()
+                if "/in/" in href:
+                    personal_linkedins.add(href)
+                elif "/company/" in href and not company_linkedin:
+                    company_linkedin = href
+
+            for e in re.findall(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", main_html):
+                e_clean = e.strip().lower()
+                if not e_clean.endswith((".png", ".jpg", ".webp", ".svg", ".js", ".css", ".gif", "example.com", "wixpress.com")):
+                    emails.add(e_clean)
+
+            parsed = urlparse(target_url if target_url.startswith("http") else f"https://{target_url}")
+            base_domain = f"{parsed.scheme}://{parsed.netloc}"
+            for sub in ["/about", "/about-us", "/team", "/impressum", "/impressum/", "/contact", "/mentions-legales", "/legal"]:
+                try:
+                    sub_res = session.get(f"{base_domain}{sub}", timeout=4)
+                    if sub_res.status_code == 200 and sub_res.text:
+                        sub_soup = BeautifulSoup(sub_res.text, "html.parser")
+                        sub_text = " ".join(sub_soup.get_text(" ", strip=True).split())
+                        snippets.append(f"Subpage ({sub}) Text: {sub_text[:1500]}")
+                        
+                        for a in sub_soup.select("a[href*='linkedin.com']"):
+                            href = a["href"].strip()
+                            if "/in/" in href:
+                                personal_linkedins.add(href)
+                            elif "/company/" in href and not company_linkedin:
+                                company_linkedin = href
+
+                        for e in re.findall(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", sub_res.text):
+                            e_clean = e.strip().lower()
+                            if not e_clean.endswith((".png", ".jpg", ".webp", ".svg", ".js", ".css", ".gif", "example.com", "wixpress.com")):
+                                emails.add(e_clean)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    return {
+        "website": target_url if main_html else None,
+        "emails": emails,
+        "personal_linkedins": personal_linkedins,
+        "company_linkedin": company_linkedin,
+        "text_snippets": snippets,
+    }
+
+
+# ============================================================
+# SEARCH
+# ============================================================
+
+def search_company(company_name: str, website: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Search for startup founders, contact emails, and personal LinkedIn profiles."""
+    clean_site = ""
+    if website and not is_affiliate_or_blocked_url(website):
+        parsed = urlparse(website if website.startswith("http") else f"https://{website}")
+        clean_site = parsed.netloc.replace("www.", "")
 
     queries = [
-        f'"{company_name}" founder',
-        f'"{company_name}" CEO founder',
-        f'"{company_name}" founder email',
-        f'"{company_name}" contact email',
+        f'{company_name} founder CEO site:linkedin.com/in',
+        f'{company_name} founder CEO cofounder',
+        f'{company_name} founder email contact',
     ]
-
-    # Only add domain search if we have a real website
-    if website:
-
-        clean_website = (
-            website
-            .replace("https://", "")
-            .replace("http://", "")
-            .split("/")[0]
-        )
-
-        if clean_website:
-
-            queries.append(
-                f'"{company_name}" site:{clean_website} founder'
-            )
+    if clean_site:
+        queries.append(f'site:{clean_site} team founder impressum')
 
     all_results = []
+    tavily_working = tavily_client is not None
 
     for query in queries:
+        if tavily_working:
+            try:
+                response = tavily_client.search(
+                    query=query,
+                    search_depth="advanced",
+                    max_results=MAX_SEARCH_RESULTS,
+                )
+                for r in response.get("results", []):
+                    all_results.append({
+                        "title": r.get("title"),
+                        "url": r.get("url"),
+                        "content": r.get("content"),
+                    })
+            except Exception:
+                tavily_working = False
 
-        print(f"    Tavily search: {query}")
+        if not tavily_working and DDGS:
+            try:
+                with DDGS() as ddgs:
+                    for r in ddgs.text(query, max_results=MAX_SEARCH_RESULTS):
+                        all_results.append({
+                            "title": r.get("title"),
+                            "url": r.get("href"),
+                            "content": r.get("body"),
+                        })
+            except Exception:
+                pass
 
-        try:
-
-            response = tavily.search(
-                query=query,
-                search_depth="advanced",
-                max_results=MAX_SEARCH_RESULTS,
-                include_answer=True,
-                include_raw_content=False,
-            )
-
-            results = response.get(
-                "results",
-                []
-            )
-
-            for result in results:
-
-                all_results.append({
-                    "title": result.get("title"),
-                    "url": result.get("url"),
-                    "content": result.get("content"),
-                })
-
-        except Exception as e:
-
-            print(
-                f"    Tavily error: {e}"
-            )
-
-    # Remove duplicate URLs
     unique_results = {}
+    for r in all_results:
+        u = r.get("url")
+        if u and u not in unique_results:
+            unique_results[u] = r
 
-    for result in all_results:
-
-        url = result.get("url")
-
-        if url:
-            unique_results[url] = result
-
-    return list(
-        unique_results.values()
-    )
+    return list(unique_results.values())
 
 
 # ============================================================
-# GEMINI
+# GEMINI INTELLIGENCE REASONING
 # ============================================================
 
 def extract_company_data(
     company_name: str,
     website: Optional[str],
-    search_results
-):
-
-    if not search_results:
-        return None
-
+    description: Optional[str],
+    country: Optional[str],
+    city: Optional[str],
+    dir_info: Dict[str, Any],
+    direct_probe: Dict[str, Any],
+    search_results: List[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """Synthesize company facts and extract verified leadership & direct contact emails using Gemini."""
     search_text = ""
+    for idx, r in enumerate(search_results, start=1):
+        search_text += f"\n[Source {idx}] {r.get('title')}\nURL: {r.get('url')}\nContent: {r.get('content')}\n"
 
-    for index, result in enumerate(
-        search_results,
-        start=1
-    ):
+    probe_text = ""
+    if direct_probe.get("text_snippets"):
+        probe_text = "\n\nDIRECT WEBSITE SCRAPE:\n" + "\n---\n".join(direct_probe["text_snippets"])
 
-        search_text += f"""
-SOURCE {index}
+    dir_text = f"\n\nEU-STARTUPS DIRECTORY LISTING:\n{dir_info.get('text', '')}"
 
-Title:
-{result.get("title")}
+    known_emails_str = ", ".join(direct_probe.get("emails", [])) if direct_probe.get("emails") else "None detected"
+    known_personal_li = ", ".join(direct_probe.get("personal_linkedins", [])) if direct_probe.get("personal_linkedins") else "None"
+    known_company_li = dir_info.get("company_linkedin") or direct_probe.get("company_linkedin") or "Not detected"
 
-URL:
-{result.get("url")}
+    prompt = f"""You are an elite B2B Corporate Researcher identifying REAL startup founders and direct executive contact info.
 
-Content:
-{result.get("content")}
+Target Startup:
+- Name: {company_name}
+- Scraped Website: {website or "Unknown"}
+- Location: {city or ""}, {country or ""}
+- Directory Overview: {description or dir_info.get('description') or "Not available"}
+- Known Company LinkedIn: {known_company_li}
+- Discovered Personal LinkedIn URLs: {known_personal_li}
+- Discovered Candidate Emails on Website: {known_emails_str}
 
---------------------------------------------------
-"""
+Web Research & Scraped Content:
+{dir_text}
+{probe_text}
+{search_text}
 
-    prompt = f"""
-You are a startup/company research assistant.
+TASK:
+1. Identify REAL human individuals who are Founders, Co-Founders, CEO, CTO, or Key Executives:
+   - Full Name (e.g. 'Jennifer Sharman', 'Mike A', 'Kris Carey', 'Sergiu Biris', 'Gianni Valerio')
+   - Exact Role (e.g. 'Co-founder & CEO', 'Founder', 'Managing Director')
+   - Direct Personal Email:
+     * MUST be the direct email of this specific person (e.g. 'jennifer.sharman@linxei.com', 'mikea@hedgehog.education', 'sergiu@invoflux.com', 'kris@visionweb.ie').
+     * CRITICAL RULE: NEVER assign generic support@, info@, hello@, sales@, contact@, admin@ as a founder's personal email. If no direct personal email is found, return null for email.
+   - Personal LinkedIn Profile URL:
+     * MUST be an individual profile ('https://www.linkedin.com/in/...').
+     * NEVER put a company LinkedIn page ('/company/') in a person's linkedin field.
+2. Official Company Contact Email:
+   - General company inbox (e.g. 'support@linxei.com', 'hello@colchix.com', 'info@civac.de', 'contact@...').
+3. Company LinkedIn Page:
+   - 'https://www.linkedin.com/company/...' (or null if not found).
+4. Verified Official Website:
+   - Resolve any affiliate or redirect link to real company domain.
 
-We recently scraped this startup:
+STRICT CONSTRAINTS:
+- DO NOT create fake placeholder people (like 'Company Contact' or 'Management Contact'). If no named founder is found, keep "people": [].
+- Never assign info@, support@, hello@, contact@ to a founder's email. Only use direct personal emails.
 
-Company:
-{company_name}
-
-Website:
-{website or "Unknown"}
-
-We used Tavily to search the web. The search results are provided below.
-
-Your job is to find reliable information about:
-
-1. Founder
-2. Co-founder
-3. CEO
-4. Other clearly relevant company leadership
-5. Publicly available business/company email
-6. Publicly available founder business email
-
-IMPORTANT RULES:
-
-- ONLY use information supported by the provided sources.
-- NEVER invent a person.
-- NEVER guess an email address.
-- Do NOT construct an email from a person's name.
-- Only return an email if it is explicitly present in a source.
-- Prefer official company websites.
-- LinkedIn, Crunchbase, accelerator pages, interviews,
-  reputable startup databases and news sites can also be used.
-- If founder information cannot be confirmed, return an empty people array.
-- If no email is explicitly available, return null.
-- A generic company email such as info@company.com is acceptable
-  if it is explicitly found.
-- A founder's publicly listed business email is acceptable
-  if explicitly found.
-- Include source URLs that support the result.
-- Keep confidence conservative.
-
-Return ONLY valid JSON.
-
-Use exactly this structure:
-
+Return ONLY valid JSON matching this schema:
 {{
     "company": "{company_name}",
+    "real_website": "https://...",
+    "company_linkedin": "https://www.linkedin.com/company/... or null",
     "people": [
         {{
             "name": "Full Name",
-            "role": "Founder / Co-Founder / CEO",
-            "evidence": "Short explanation"
+            "role": "Founder / CEO / Co-Founder",
+            "email": "direct_founder_email@domain or null",
+            "linkedin": "https://www.linkedin.com/in/... or null",
+            "evidence": "Brief source note"
         }}
     ],
-    "email": "email@example.com",
-    "email_type": "company / founder / other",
-    "source_urls": [
-        "https://example.com"
-    ],
+    "company_email": "support@... or info@... or hello@... or null",
+    "source_urls": ["https://..."],
     "confidence": "high / medium / low"
 }}
-
-If nothing reliable is found, return:
-
-{{
-    "company": "{company_name}",
-    "people": [],
-    "email": null,
-    "email_type": null,
-    "source_urls": [],
-    "confidence": "low"
-}}
-
-TAVILY SEARCH RESULTS:
-
-{search_text}
 """
 
-    try:
-
-        response = gemini.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=prompt,
-            config={
-                "temperature": 0,
-            },
-        )
-
-        text = clean_json_response(
-            response.text
-        )
-
-        result = json.loads(text)
-
-        return result
-
-    except json.JSONDecodeError as e:
-
-        print(
-            f"    Gemini JSON error: {e}"
-        )
-
-        print(
-            "    Gemini response:"
-        )
-
-        print(
-            response.text[:2000]
-        )
-
-        return None
-
-    except Exception as e:
-
-        print(
-            f"    Gemini error: {e}"
-        )
-
-        return None
-
-
-# ============================================================
-# DATABASE UPDATE
-# ============================================================
-
-def update_company(
-    conn,
-    company_id,
-    id_column,
-    people_column,
-    email_column,
-    enrichment_column,
-    result,
-    existing_people,
-    existing_email,
-    normalized_schema=False,
-):
-
-    cursor = conn.cursor()
-
-    updates = []
-    values = []
-
-    # --------------------------------------------------------
-    # PEOPLE
-    # --------------------------------------------------------
-
-    # Only update people if currently empty
-    if normalized_schema and is_empty(existing_people):
-        people = result.get("people", [])
-        for person in people:
-            if not person.get("name"):
+    models_to_try = [GEMINI_MODEL, "gemini-3.5-flash", "gemini-2.5-flash"]
+    for model_name in models_to_try:
+        try:
+            response = gemini.models.generate_content(
+                model=model_name,
+                contents=prompt,
+                config={"temperature": 0.0},
+            )
+            cleaned = clean_json_response(response.text)
+            parsed = json.loads(cleaned)
+            return parsed
+        except Exception as e:
+            if "503" in str(e) or "404" in str(e):
                 continue
-            cursor.execute(
-                """
-                INSERT INTO people (startup_id, name, role, source_url)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(startup_id, name, role)
-                DO UPDATE SET source_url = excluded.source_url
-                """,
-                (
-                    company_id,
-                    person.get("name"),
-                    person.get("role"),
-                    ", ".join(result.get("source_urls", [])),
-                ),
-            )
+            print(f"    Gemini error ({model_name}): {e}")
 
-    elif (
-        people_column
-        and is_empty(existing_people)
-    ):
+    return None
 
-        people = result.get(
-            "people",
-            []
-        )
 
-        if people:
+# ============================================================
+# DATABASE PERSISTENCE
+# ============================================================
 
-            people_json = json.dumps(
-                people,
-                ensure_ascii=False
-            )
+def persist_enrichment(
+    conn: sqlite3.Connection,
+    company_id: int,
+    company_name: str,
+    original_website: Optional[str],
+    result: Dict[str, Any],
+    dir_info: Dict[str, Any],
+    direct_probe: Dict[str, Any],
+) -> None:
+    """Save enriched people, contacts, company LinkedIn, and real website into SQLite database."""
+    cur = conn.cursor()
+    source_urls = ", ".join(result.get("source_urls", [])) or "EU-Startups & Web Research"
 
-            updates.append(
-                f'"{people_column}" = ?'
-            )
+    # 1. Update real website & company LinkedIn
+    real_website = result.get("real_website") or direct_probe.get("website") or dir_info.get("website")
+    if real_website and is_affiliate_or_blocked_url(original_website):
+        cur.execute("UPDATE startups SET website = ? WHERE id = ?", (real_website, company_id))
+    
+    company_li = result.get("company_linkedin") or dir_info.get("company_linkedin") or direct_probe.get("company_linkedin")
+    if company_li:
+        cur.execute("UPDATE startups SET company_linkedin = ? WHERE id = ?", (company_li, company_id))
 
-            values.append(
-                people_json
-            )
+    if dir_info.get("description"):
+        cur.execute("""
+            UPDATE startups SET description = ? 
+            WHERE id = ? AND (description IS NULL OR LENGTH(description) < LENGTH(?))
+        """, (dir_info["description"], company_id, dir_info["description"]))
 
-    # --------------------------------------------------------
-    # EMAIL
-    # --------------------------------------------------------
+    # 2. Insert ONLY real people (NO fake "Company Contact" records)
+    people_list = result.get("people", [])
 
-    # Only update email if currently empty
-    if normalized_schema and is_empty(existing_email):
-        email = result.get("email")
-        if email:
-            cursor.execute(
-                """
-                INSERT INTO contacts (startup_id, contact_type, value, source_url)
-                VALUES (?, 'email', ?, ?)
-                """,
-                (
-                    company_id,
-                    email,
-                    ", ".join(result.get("source_urls", [])),
-                ),
-            )
+    for p in people_list:
+        name = p.get("name")
+        if not name or name.strip().lower() in ("unknown", "n/a", "none", f"{company_name.lower()} contact", "company contact"):
+            continue
+        role = p.get("role") or "Leadership"
+        
+        # Enforce direct personal email (reject generic info/support/hello for the person)
+        p_email = p.get("email")
+        if p_email and is_generic_email(p_email):
+            p_email = None
+        
+        # Enforce personal LinkedIn (/in/)
+        raw_li = p.get("linkedin")
+        personal_li, found_company_li = clean_linkedin_url(raw_li)
+        if found_company_li and not company_li:
+            cur.execute("UPDATE startups SET company_linkedin = ? WHERE id = ?", (found_company_li, company_id))
 
-    elif (
-        email_column
-        and is_empty(existing_email)
-    ):
+        cur.execute("""
+            INSERT INTO people (startup_id, name, role, email, linkedin, source_url)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(startup_id, name, role)
+            DO UPDATE SET 
+                email = COALESCE(excluded.email, people.email),
+                linkedin = COALESCE(excluded.linkedin, people.linkedin),
+                source_url = excluded.source_url
+        """, (company_id, name.strip(), role.strip(), p_email, personal_li, source_urls))
 
-        email = result.get(
-            "email"
-        )
+    # 3. Insert company emails into contacts table
+    all_emails = set()
+    primary_email = result.get("company_email")
+    if primary_email:
+        all_emails.add(primary_email)
+    for e in direct_probe.get("emails", []):
+        all_emails.add(e)
 
-        if email:
+    for email_val in all_emails:
+        cur.execute("""
+            INSERT INTO contacts (startup_id, contact_type, value, source_url)
+            VALUES (?, 'email', ?, ?)
+        """, (company_id, email_val.strip().lower(), source_urls))
 
-            updates.append(
-                f'"{email_column}" = ?'
-            )
+    if company_li:
+        cur.execute("""
+            INSERT INTO contacts (startup_id, contact_type, value, source_url)
+            VALUES (?, 'company_linkedin', ?, ?)
+        """, (company_id, company_li, source_urls))
 
-            values.append(email)
-
-    # --------------------------------------------------------
-    # RAW GEMINI RESULT
-    # --------------------------------------------------------
-
-    updates.append(
-        f'"{enrichment_column}" = ?'
-    )
-
-    values.append(
-        json.dumps(
-            result,
-            ensure_ascii=False
-        )
-    )
-
-    # --------------------------------------------------------
-    # UPDATE
-    # --------------------------------------------------------
-
-    values.append(company_id)
-
-    sql = f"""
-        UPDATE startups
-        SET {", ".join(updates)}
-        WHERE "{id_column}" = ?
-    """
-
-    cursor.execute(
-        sql,
-        values
-    )
+    # 4. Update startups timestamp and raw JSON
+    cur.execute("""
+        UPDATE startups 
+        SET enrichment_result = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+    """, (json.dumps(result, ensure_ascii=False), company_id))
 
     conn.commit()
 
 
 # ============================================================
-# MAIN
+# MAIN ORCHESTRATION
 # ============================================================
 
-def main():
+def enrich_startup(conn: sqlite3.Connection, row: sqlite3.Row) -> bool:
+    """Enrich a single startup row."""
+    company_id = row["id"]
+    company_name = row["company_name"]
+    website = row["website"]
+    eu_url = row["eu_startups_url"]
+    description = row["description"]
+    country = row["country"]
+    city = row["city"]
 
-    print("\n")
-    print("=" * 70)
-    print("STARTUP ENRICHMENT")
-    print("=" * 70)
+    print(f"\n[{company_id}] Enriching: {company_name} (Location: {city}, {country})")
 
+    # Step 1: Directory deep scrape
+    print("  -> Scraping directory listing...")
+    dir_info = scrape_eu_startups_directory_entry(eu_url)
+    target_site = dir_info.get("website") or website
+
+    # Step 2: Direct website probing
+    print("  -> Probing website & subpages...")
+    probe_data = probe_company_website(company_name, target_site)
+    effective_site = probe_data.get("website") or target_site
+    if probe_data.get("emails"):
+        print(f"  -> Discovered emails: {probe_data['emails']}")
+    if probe_data.get("personal_linkedins"):
+        print(f"  -> Discovered personal LinkedIn: {probe_data['personal_linkedins']}")
+
+    # Step 3: Multi-source web search
+    print("  -> Conducting targeted web search...")
+    search_results = search_company(company_name, effective_site)
+    print(f"  -> Found {len(search_results)} search sources")
+
+    # Step 4: Gemini Reasoning
+    print("  -> Reasoning with Gemini...")
+    result = extract_company_data(
+        company_name=company_name,
+        website=effective_site,
+        description=description,
+        country=country,
+        city=city,
+        dir_info=dir_info,
+        direct_probe=probe_data,
+        search_results=search_results,
+    )
+
+    if not result:
+        print("  -> No structured data returned from Gemini.")
+        return False
+
+    people = result.get("people", [])
+    email = result.get("company_email")
+    company_li = result.get("company_linkedin") or dir_info.get("company_linkedin")
+    print(f"  -> Extracted: {len(people)} real people | Company Email: {email} | Company LinkedIn: {company_li}")
+    for p in people:
+        print(f"     * {p.get('name')} ({p.get('role')}) - Direct Email: {p.get('email')} - Personal LinkedIn: {p.get('linkedin')}")
+
+    # Step 5: Save to DB
+    persist_enrichment(
+        conn=conn,
+        company_id=company_id,
+        company_name=company_name,
+        original_website=website,
+        result=result,
+        dir_info=dir_info,
+        direct_probe=probe_data,
+    )
+    print("  -> Saved to database successfully.")
+    return True
+
+
+def run_enrichment(limit: Optional[int] = None, company_id: Optional[int] = None, force_all: bool = False):
     conn = get_connection()
+    cur = conn.cursor()
 
-    # --------------------------------------------------------
-    # Get DB columns
-    # --------------------------------------------------------
-
-    columns = get_columns(conn)
-
-    print("\nDatabase columns:")
-    print(columns)
-
-    # --------------------------------------------------------
-    # Detect columns
-    # --------------------------------------------------------
-
-    id_column = find_column(
-        columns,
-        [
-            "id",
-            "startup_id",
-            "company_id",
-        ]
-    )
-
-    company_column = find_column(
-        columns,
-        [
-            "company",
-            "company_name",
-            "startup",
-            "startup_name",
-            "name",
-        ]
-    )
-
-    people_column = find_column(
-        columns,
-        [
-            "people",
-            "person",
-            "founders",
-            "founder",
-            "team",
-        ]
-    )
-
-    email_column = find_column(
-        columns,
-        [
-            "email",
-            "emails",
-            "contact_email",
-        ]
-    )
-
-    website_column = find_column(
-        columns,
-        [
-            "website",
-            "url",
-            "company_website",
-            "website_url",
-        ]
-    )
-
-    normalized_schema = (
-        not people_column
-        and not email_column
-        and table_exists(conn, "people")
-        and table_exists(conn, "contacts")
-    )
-
-    # --------------------------------------------------------
-    # Print detected columns
-    # --------------------------------------------------------
-
-    print("\nDetected columns:")
-    print(f"  ID      : {id_column}")
-    print(f"  Company : {company_column}")
-    print(f"  People  : {people_column}")
-    print(f"  Email   : {email_column}")
-    print(f"  Website : {website_column}")
-
-    # --------------------------------------------------------
-    # Validate
-    # --------------------------------------------------------
-
-    if not id_column:
-
-        raise ValueError(
-            "Could not find ID column"
-        )
-
-    if not company_column:
-
-        raise ValueError(
-            "Could not find company/startup name column"
-        )
-
-    if not normalized_schema and not people_column and not email_column:
-
-        raise ValueError(
-            "Could not find people or email column"
-        )
-
-    # --------------------------------------------------------
-    # Add enrichment_result column
-    # --------------------------------------------------------
-
-    enrichment_column = find_column(
-        columns,
-        [
-            "enrichment_result",
-            "llm_result",
-            "research_result",
-        ]
-    )
-
-    if not enrichment_column:
-
-        print(
-            "\nAdding enrichment_result column..."
-        )
-
-        conn.execute(
-            """
-            ALTER TABLE startups
-            ADD COLUMN enrichment_result TEXT
-            """
-        )
-
+    cur.execute("PRAGMA table_info(startups)")
+    cols = [r[1] for r in cur.fetchall()]
+    if "enrichment_result" not in cols:
+        conn.execute("ALTER TABLE startups ADD COLUMN enrichment_result TEXT")
+        conn.commit()
+    if "company_linkedin" not in cols:
+        conn.execute("ALTER TABLE startups ADD COLUMN company_linkedin TEXT")
         conn.commit()
 
-        enrichment_column = (
-            "enrichment_result"
-        )
-
-    # --------------------------------------------------------
-    # Get all startups
-    # --------------------------------------------------------
-
-    cursor = conn.cursor()
-
-    people_select = (
-        f'"{people_column}"'
-        if people_column
-        else """
-            (
-                SELECT GROUP_CONCAT(name, ', ')
-                FROM people
-                WHERE people.startup_id = startups.id
-            )
+    if company_id:
+        rows = cur.execute("SELECT * FROM startups WHERE id = ?", (company_id,)).fetchall()
+    elif force_all:
+        rows = cur.execute("SELECT * FROM startups ORDER BY id ASC").fetchall()
+    else:
+        query = """
+            SELECT s.*
+            FROM startups s
+            LEFT JOIN people p ON p.startup_id = s.id
+            WHERE p.id IS NULL
+            ORDER BY s.id ASC
         """
-    )
+        if limit:
+            query += f" LIMIT {limit}"
+        rows = cur.execute(query).fetchall()
 
-    email_select = (
-        f'"{email_column}"'
-        if email_column
-        else """
-            COALESCE(
-                (
-                    SELECT GROUP_CONCAT(value, ', ')
-                    FROM contacts
-                    WHERE contacts.startup_id = startups.id
-                      AND LOWER(contacts.contact_type) LIKE '%email%'
-                ),
-                (
-                    SELECT GROUP_CONCAT(email, ', ')
-                    FROM people
-                    WHERE people.startup_id = startups.id
-                      AND email IS NOT NULL
-                )
-            )
-        """
-    )
-
-    website_select = (
-        f'"{website_column}"'
-        if website_column
-        else "NULL"
-    )
-
-    query = f"""
-        SELECT
-            "{id_column}",
-            "{company_column}",
-            {people_select},
-            {email_select},
-            {website_select}
-        FROM startups
-    """
-
-    cursor.execute(query)
-
-    all_rows = cursor.fetchall()
-
-    # --------------------------------------------------------
-    # Find incomplete startups
-    # --------------------------------------------------------
-
-    incomplete_rows = []
-
-    for row in all_rows:
-
-        people_value = row[2]
-        email_value = row[3]
-
-        people_missing = is_empty(
-            people_value
-        )
-
-        email_missing = is_empty(
-            email_value
-        )
-
-        if (
-            people_missing
-            or email_missing
-        ):
-
-            incomplete_rows.append(row)
-
-        # TEST LIMIT
-        if len(incomplete_rows) >= LIMIT:
-            break
-
-    # --------------------------------------------------------
-    # Start processing
-    # --------------------------------------------------------
-
-    print("\n")
     print("=" * 70)
-    print(
-        f"Found {len(incomplete_rows)} incomplete startups"
-    )
-    print(
-        f"TEST LIMIT = {LIMIT}"
-    )
+    print(f"EU STARTUPS ENRICHMENT ENGINE | Targets: {len(rows)}")
     print("=" * 70)
 
-    enriched = 0
-
-    for index, row in enumerate(
-        incomplete_rows,
-        start=1
-    ):
-
-        company_id = row[0]
-        company_name = row[1]
-        people_value = row[2]
-        email_value = row[3]
-        website_value = row[4]
-
-        print("\n")
-        print("=" * 70)
-        print(
-            f"[{index}/{len(incomplete_rows)}] "
-            f"{company_name}"
-        )
-        print("=" * 70)
-
-        print(
-            f"Website: {website_value}"
-        )
-
-        print(
-            f"People missing: "
-            f"{is_empty(people_value)}"
-        )
-
-        print(
-            f"Email missing: "
-            f"{is_empty(email_value)}"
-        )
-
-        # ----------------------------------------------------
-        # Tavily
-        # ----------------------------------------------------
-
-        print("\nSearching Tavily...")
-
-        search_results = search_company(
-            company_name,
-            website_value
-        )
-
-        print(
-            f"Found {len(search_results)} "
-            f"unique search sources"
-        )
-
-        if not search_results:
-
-            print(
-                "No Tavily results. Skipping."
-            )
-
-            continue
-
-        # ----------------------------------------------------
-        # Gemini
-        # ----------------------------------------------------
-
-        print("\nSending results to Gemini...")
-
-        result = extract_company_data(
-            company_name,
-            website_value,
-            search_results
-        )
-
-        if not result:
-
-            print(
-                "Gemini did not return valid data."
-            )
-
-            continue
-
-        # ----------------------------------------------------
-        # Show result
-        # ----------------------------------------------------
-
-        print("\nGemini result:")
-
-        print(
-            json.dumps(
-                result,
-                indent=2,
-                ensure_ascii=False
-            )
-        )
-
-        # ----------------------------------------------------
-        # Update database
-        # ----------------------------------------------------
-
-        update_company(
-            conn=conn,
-            company_id=company_id,
-            id_column=id_column,
-            people_column=people_column,
-            email_column=email_column,
-            enrichment_column=enrichment_column,
-            result=result,
-            existing_people=people_value,
-            existing_email=email_value,
-            normalized_schema=normalized_schema,
-        )
-
-        print(
-            "\nDatabase updated successfully."
-        )
-
-        enriched += 1
-
-        time.sleep(
-            SLEEP_BETWEEN_COMPANIES
-        )
-
-    # --------------------------------------------------------
-    # Finish
-    # --------------------------------------------------------
+    success_count = 0
+    for idx, row in enumerate(rows, start=1):
+        print(f"\nProgress: [{idx}/{len(rows)}]")
+        if enrich_startup(conn, row):
+            success_count += 1
+        time.sleep(SLEEP_BETWEEN_COMPANIES)
 
     conn.close()
-
-    print("\n")
-    print("=" * 70)
-    print("FINISHED")
+    print("\n" + "=" * 70)
+    print(f"FINISHED: Enriched {success_count}/{len(rows)} startups")
     print("=" * 70)
 
-    print(
-        f"Processed: {len(incomplete_rows)}"
-    )
-
-    print(
-        f"Updated: {enriched}"
-    )
-
-    print(
-        f"Remaining limit: {LIMIT}"
-    )
-
-    print("=" * 70)
-
-
-# ============================================================
-# RUN
-# ============================================================
 
 if __name__ == "__main__":
-    main()
+    import argparse
+    parser = argparse.ArgumentParser(description="Enrich EU Startups with Real Founders, Direct Emails, and Personal LinkedIn")
+    parser.add_argument("--limit", "-l", type=int, default=10, help="Number of startups to enrich")
+    parser.add_argument("--id", type=int, default=None, help="Enrich a specific startup by ID")
+    parser.add_argument("--all", action="store_true", help="Enrich all pending startups without people")
+    parser.add_argument("--recheck", action="store_true", help="Re-enrich all 131 startups in the database")
+    args = parser.parse_args()
+
+    if args.recheck:
+        run_enrichment(force_all=True)
+    else:
+        limit = None if args.all else args.limit
+        run_enrichment(limit=limit, company_id=args.id)

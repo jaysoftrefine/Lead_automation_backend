@@ -945,14 +945,16 @@ document.addEventListener("DOMContentLoaded", () => {
   function renderEURows(rows) {
     if (!euTableBody) return;
     euTableBody.innerHTML = rows.map(s => {
-      const peopleList = (s.people || []).map(p => `
+      const peopleList = (s.people || []).map(p => {
+        const isPersonal = p.linkedin && p.linkedin.includes("/in/");
+        return `
         <div class="eu-person-block">
           <div class="eu-person-title">${escapeHtml(p.name || "Public Contact")}</div>
           ${p.role ? `<div class="eu-person-subrole">${escapeHtml(p.role)}</div>` : ""}
           ${p.email ? `<div class="eu-person-mail">✉ ${escapeHtml(p.email)}</div>` : ""}
-          ${p.linkedin ? `<a href="${escapeHtml(p.linkedin)}" target="_blank" rel="noopener noreferrer" class="eu-person-linkedin"><i data-lucide="linkedin" style="width:12px;height:12px;"></i> LinkedIn</a>` : ""}
+          ${isPersonal ? `<a href="${escapeHtml(p.linkedin)}" target="_blank" rel="noopener noreferrer" class="eu-person-linkedin"><i data-lucide="linkedin" style="width:12px;height:12px;"></i> Founder LinkedIn</a>` : ""}
         </div>
-      `).join("");
+      `;}).join("");
 
       const tagsList = s.tags ? s.tags.split(",").map(t => t.trim()).filter(Boolean).map(t => `
         <span class="eu-tag-pill">${escapeHtml(t)}</span>
@@ -993,7 +995,8 @@ document.addEventListener("DOMContentLoaded", () => {
           </td>
           <td>
             ${s.eu_startups_url ? `<a href="${escapeHtml(s.eu_startups_url)}" target="_blank" rel="noopener noreferrer" class="eu-link-action"><i data-lucide="external-link" style="width:12px;height:12px;"></i> EU-Startups</a><br>` : ""}
-            ${s.website ? `<a href="${escapeHtml(s.website)}" target="_blank" rel="noopener noreferrer" class="eu-link-action"><i data-lucide="globe" style="width:12px;height:12px;"></i> Website</a>` : ""}
+            ${s.website ? `<a href="${escapeHtml(s.website)}" target="_blank" rel="noopener noreferrer" class="eu-link-action"><i data-lucide="globe" style="width:12px;height:12px;"></i> Website</a><br>` : ""}
+            ${s.company_linkedin ? `<a href="${escapeHtml(s.company_linkedin)}" target="_blank" rel="noopener noreferrer" class="eu-link-action"><i data-lucide="linkedin" style="width:12px;height:12px;"></i> Company LinkedIn</a>` : ""}
           </td>
         </tr>
       `;

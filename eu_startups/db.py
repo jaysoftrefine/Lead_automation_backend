@@ -48,6 +48,8 @@ def create_database():
             category TEXT,
             tags TEXT,
 
+            company_linkedin TEXT,
+
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
