@@ -951,7 +951,7 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     } catch (err) {
       if (euTableBody) {
-        euTableBody.innerHTML = `<tr><td colspan="8" style="text-align:center; padding: 40px; color: #fb7185;">Error loading startups: ${escapeHtml(err.message)}</td></tr>`;
+        euTableBody.innerHTML = `<tr><td colspan="9" style="text-align:center; padding: 40px; color: #fb7185;">Error loading startups: ${escapeHtml(err.message)}</td></tr>`;
       }
     } finally {
       if (euLoadingSpinner) euLoadingSpinner.style.display = "none";
@@ -1000,13 +1000,15 @@ document.addEventListener("DOMContentLoaded", () => {
           <td>
             <div style="font-family:var(--font-mono); font-weight:700; color:#38bdf8; font-size:0.86rem; display:flex; align-items:center; gap:4px;">
               <i data-lucide="calendar" style="width:12px;height:12px;color:var(--accent-cyan);"></i>
-              <span>${escapeHtml(s.founded_year || "—")}</span>
+              <span>${escapeHtml(s.founded_year ? String(s.founded_year) : "—")}</span>
             </div>
+          </td>
+          <td>
             ${s.created_at ? `
-            <div style="font-size:0.72rem; color:var(--text-muted); margin-top:4px; display:flex; align-items:center; gap:3px; white-space:nowrap;" title="Scraped & Added at ${escapeHtml(s.created_at)}">
+            <div style="font-size:0.78rem; color:var(--text-muted); display:flex; align-items:center; gap:3px; white-space:nowrap;" title="Scraped &amp; Added at ${escapeHtml(s.created_at)}">
               <i data-lucide="clock" style="width:10px;height:10px;color:var(--text-dim);"></i>
               <span>${formatEUScrapedDate(s.created_at)}</span>
-            </div>` : ""}
+            </div>` : `<span style="color:var(--text-dim);">—</span>`}
           </td>
           <td class="eu-tag-text">
             ${tagsList}
