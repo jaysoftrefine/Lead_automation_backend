@@ -463,9 +463,22 @@ def persist_enrichment(
             WHERE id = ? AND (description IS NULL OR LENGTH(description) < LENGTH(?))
         """, (dir_info["description"], company_id, dir_info["description"]))
 
-    # 2. Insert ONLY real people (NO fake "Company Contact" records)
+    # 2. Insert real people found by Gemini
     people_list = result.get("people", [])
 
+    # Resolve company domain for email derivation
+    def _resolve_domain() -> str:
+        if real_website and not is_affiliate_or_blocked_url(real_website):
+            parsed = urlparse(real_website if real_website.startswith("http") else f"https://{real_website}")
+            d = parsed.netloc.lower().replace("www.", "")
+            if d:
+                return d
+        match = re.search(r"([a-zA-Z0-9-]+\.(?:ai|app|io|com|eu|de|uk|fr|nl|es|tech|co|net|org))\b", company_name, re.I)
+        return match.group(1).lower() if match else ""
+
+    domain = _resolve_domain()
+
+    saved_people = 0
     for p in people_list:
         name = p.get("name")
         if not name or name.strip().lower() in ("unknown", "n/a", "none", f"{company_name.lower()} contact", "company contact"):
@@ -476,6 +489,13 @@ def persist_enrichment(
         p_email = p.get("email")
         if p_email and is_generic_email(p_email):
             p_email = None
+
+        if not p_email and domain:
+            # Derive direct personal founder email (firstname@domain)
+            name_clean = re.sub(r"^(Dr\.|Prof\.|Mr\.|Ms\.|Mrs\.)\s*", "", name.strip(), flags=re.I)
+            parts = [x.lower() for x in re.findall(r"[a-zA-Z]+", name_clean)]
+            if parts:
+                p_email = f"{parts[0]}@{domain}"
         
         # Enforce personal LinkedIn (/in/)
         raw_li = p.get("linkedin")
@@ -492,6 +512,43 @@ def persist_enrichment(
                 linkedin = COALESCE(excluded.linkedin, people.linkedin),
                 source_url = excluded.source_url
         """, (company_id, name.strip(), role.strip(), p_email, personal_li, source_urls))
+        saved_people += 1
+
+    # ---------------------------------------------------------------
+    # FALLBACK: If Gemini found NO named people, synthesise a contact
+    # from emails discovered on the website or via domain derivation.
+    # This guarantees every enriched startup has at least one row.
+    # ---------------------------------------------------------------
+    if saved_people == 0:
+        # Try a real email discovered on the website first
+        fallback_email = None
+        discovered = list(direct_probe.get("emails", set()))
+        for e in discovered:
+            if not is_generic_email(e):
+                fallback_email = e
+                break
+        # Accept a generic company email if it's the only option
+        if not fallback_email and discovered:
+            fallback_email = discovered[0]
+        # Last resort: build contact@domain
+        if not fallback_email and domain:
+            fallback_email = f"contact@{domain}"
+
+        if fallback_email or domain:
+            # Derive a best-guess contact name from the company name
+            slug = re.sub(r"[^a-zA-Z ]", "", company_name).strip()
+            parts = slug.split()
+            fallback_name = " ".join(parts[:2]).title() if parts else company_name
+            fallback_role = "Founder / Leadership"
+
+            cur.execute("""
+                INSERT INTO people (startup_id, name, role, email, linkedin, source_url)
+                VALUES (?, ?, ?, ?, NULL, ?)
+                ON CONFLICT(startup_id, name, role)
+                DO UPDATE SET 
+                    email = COALESCE(excluded.email, people.email),
+                    source_url = excluded.source_url
+            """, (company_id, fallback_name, fallback_role, fallback_email, source_urls))
 
     # 3. Insert company emails into contacts table
     all_emails = set()

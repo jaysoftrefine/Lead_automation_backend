@@ -572,9 +572,12 @@
             <div class="eu-filter-row">
               <div class="eu-filter-group search-field">
                 <label for="eu-search"><i data-lucide="search"></i> Search Everything</label>
-                <div class="input-with-icon">
-                  <i data-lucide="search"></i>
+                <div class="input-with-icon-button">
+                  <i data-lucide="search" class="input-icon"></i>
                   <input type="text" id="eu-search" placeholder="Company, founder, CEO, CTO, email, tag...">
+                  <button id="eu-btn-search-inline" class="btn-input-search" title="Search Leads">
+                    <i data-lucide="arrow-right"></i>
+                  </button>
                 </div>
               </div>
               <div class="eu-filter-group">
@@ -643,6 +646,10 @@
                   <i data-lucide="filter"></i>
                   <span>Apply</span>
                 </button>
+                <button id="eu-btn-discover-open" class="btn btn-discover btn-sm" onclick="window.openDiscoverModal()" title="Search web for new European startups & auto-enrich founders">
+                  <i data-lucide="sparkles"></i>
+                  <span>Discover More Leads</span>
+                </button>
               </div>
             </div>
           </div>
@@ -685,7 +692,7 @@
                     <th>Company</th>
                     <th>Location</th>
                     <th>Category</th>
-                    <th>Founded</th>
+                    <th>Founded &amp; Scraped</th>
                     <th>Tags</th>
                     <th>People &amp; Roles</th>
                     <th>Contacts</th>
@@ -735,6 +742,94 @@
 
       <div class="modal-body" id="modal-body-content">
         <!-- Injected via JavaScript -->
+      </div>
+    </div>
+  </div>
+
+  <!-- Autonomous Lead Discovery & Deep Search Modal -->
+  <div id="eu-discover-modal" class="modal-backdrop">
+    <div class="modal-dialog glass-card discover-dialog">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <span class="platform-badge accent"><i data-lucide="sparkles" style="width:12px;height:12px;margin-right:4px;"></i> AI Discovery</span>
+          <h2>Discover &amp; Enrich More Leads</h2>
+        </div>
+        <button id="btn-close-discover-modal" class="btn-close">&times;</button>
+      </div>
+
+      <div class="modal-body">
+        <p class="discover-intro">
+          Search the web and European directory for high-growth startups, identify real human founders, extract personal LinkedIn profiles, and verify direct deliverable email addresses automatically.
+        </p>
+
+        <!-- Quick Topic Chips -->
+        <div class="discover-section">
+          <label class="discover-label"><i data-lucide="zap"></i> Select Multiple Industry Topics (Click to combine)</label>
+          <div class="topic-chips">
+            <button type="button" class="topic-chip active" data-topic="AI &amp; Automation">🤖 AI &amp; Agents</button>
+            <button type="button" class="topic-chip" data-topic="Web Development &amp; Full-Stack Apps">🌐 Web Dev</button>
+            <button type="button" class="topic-chip" data-topic="Android App &amp; Mobile Development">📱 Android Projects</button>
+            <button type="button" class="topic-chip" data-topic="iOS &amp; Apple Ecosystem Apps">🍏 iOS &amp; Mobile</button>
+            <button type="button" class="topic-chip" data-topic="B2B SaaS">☁️ B2B SaaS</button>
+            <button type="button" class="topic-chip" data-topic="Fintech &amp; Payments">💳 Fintech</button>
+            <button type="button" class="topic-chip" data-topic="Cybersecurity">🛡️ Cybersecurity</button>
+            <button type="button" class="topic-chip" data-topic="HealthTech">🩺 HealthTech</button>
+            <button type="button" class="topic-chip" data-topic="CleanTech &amp; Energy">⚡ CleanTech</button>
+            <button type="button" class="topic-chip" data-topic="Robotics &amp; Hardware">🦾 Robotics</button>
+          </div>
+        </div>
+
+        <div class="discover-grid">
+          <div class="discover-input-group">
+            <label for="discover-topic"><i data-lucide="search"></i> Search Keywords / Niche</label>
+            <input type="text" id="discover-topic" class="eu-input" placeholder="e.g. AI agents, B2B workflow automation, compliance..." value="AI &amp; Automation">
+          </div>
+
+          <div class="discover-input-group">
+            <label for="discover-country"><i data-lucide="map-pin"></i> Target Country</label>
+            <select id="discover-country" class="custom-select filter-select">
+              <option value="">All Europe</option>
+              <option value="Germany">Germany</option>
+              <option value="United Kingdom">United Kingdom</option>
+              <option value="France">France</option>
+              <option value="Netherlands">Netherlands</option>
+              <option value="Spain">Spain</option>
+              <option value="Italy">Italy</option>
+              <option value="Sweden">Sweden</option>
+              <option value="Switzerland">Switzerland</option>
+              <option value="Ireland">Ireland</option>
+              <option value="Austria">Austria</option>
+              <option value="Poland">Poland</option>
+              <option value="Denmark">Denmark</option>
+              <option value="Estonia">Estonia</option>
+            </select>
+          </div>
+
+          <div class="discover-input-group">
+            <label for="discover-limit"><i data-lucide="hash"></i> Target Batch Size</label>
+            <select id="discover-limit" class="custom-select filter-select">
+              <option value="3">3 Qualified Leads</option>
+              <option value="5" selected>5 Qualified Leads</option>
+              <option value="10">10 Qualified Leads</option>
+            </select>
+          </div>
+        </div>
+
+        <div id="discover-progress-box" class="discover-progress-box" style="display:none;">
+          <div class="discover-spinner-row">
+            <div class="spinner"></div>
+            <span id="discover-status-text">Searching European tech directory &amp; web sources...</span>
+          </div>
+          <div class="discover-subtext">Executing founder extraction, LinkedIn discovery &amp; SMTP/MX verification</div>
+        </div>
+
+        <div class="modal-footer-actions">
+          <button id="btn-cancel-discover" class="btn btn-secondary btn-sm">Cancel</button>
+          <button id="btn-start-discover" class="btn btn-discover btn-sm">
+            <i data-lucide="sparkles"></i>
+            <span>Start Lead Discovery &amp; Enrichment</span>
+          </button>
+        </div>
       </div>
     </div>
   </div>

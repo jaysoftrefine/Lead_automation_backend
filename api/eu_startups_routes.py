@@ -308,19 +308,39 @@ def trigger_enrichment(
     """Trigger background or inline lead enrichment for EU startups."""
     try:
         from eu_startups.enrich import run_enrichment, enrich_startup, get_connection
-        conn = get_connection()
+
         if startup_id:
+            # Enrich a single specific startup
+            conn = get_connection()
             row = conn.cursor().execute("SELECT * FROM startups WHERE id = ?", (startup_id,)).fetchone()
             if not row:
                 conn.close()
                 raise HTTPException(status_code=404, detail="Startup not found")
             success = enrich_startup(conn, row)
             conn.close()
-            return {"status": "success", "enriched": 1 if success else 0, "startup_id": startup_id}
+            return {"status": "success" if success else "no_data", "startup_id": startup_id}
         else:
+            # Batch enrich up to `limit` pending startups (those with no people yet)
             run_enrichment(limit=limit)
-            conn.close()
             return {"status": "success", "limit": limit}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Enrichment error: {str(e)}")
+
+
+@router.post("/discover")
+def trigger_discovery(
+    topic: str = Query("", description="Industry, keywords, or topic (e.g. 'AI', 'Fintech', 'SaaS')"),
+    country: str = Query("", description="Target European country"),
+    limit: int = Query(5, ge=1, le=25, description="Number of leads to discover"),
+) -> Dict[str, Any]:
+    """Discover new European startups, extract real founders, and auto-enrich deliverable emails."""
+    try:
+        from eu_startups.discovery import run_discovery
+        result = run_discovery(topic=topic, country=country, limit=limit)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Discovery error: {str(e)}")
+
 

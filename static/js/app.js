@@ -843,6 +843,23 @@ document.addEventListener("DOMContentLoaded", () => {
   setInterval(updateEUClock, 1000);
   updateEUClock();
 
+  function formatEUScrapedDate(dateStr) {
+    if (!dateStr) return "—";
+    try {
+      const d = new Date(dateStr.includes("T") ? dateStr : dateStr.replace(" ", "T"));
+      if (isNaN(d.getTime())) return dateStr;
+      return d.toLocaleDateString(undefined, {
+        month: "short",
+        day: "numeric",
+      }) + ", " + d.toLocaleTimeString(undefined, {
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+    } catch (e) {
+      return dateStr;
+    }
+  }
+
   async function loadEUStats() {
     try {
       const res = await fetch(`${API_BASE}/api/eu-startups/stats`);
@@ -981,7 +998,15 @@ document.addEventListener("DOMContentLoaded", () => {
             ${s.category ? `<span class="eu-cat-badge">${escapeHtml(s.category)}</span>` : "—"}
           </td>
           <td>
-            <span style="font-family:var(--font-mono); font-weight:600;">${escapeHtml(s.founded_year || "—")}</span>
+            <div style="font-family:var(--font-mono); font-weight:700; color:#38bdf8; font-size:0.86rem; display:flex; align-items:center; gap:4px;">
+              <i data-lucide="calendar" style="width:12px;height:12px;color:var(--accent-cyan);"></i>
+              <span>${escapeHtml(s.founded_year || "—")}</span>
+            </div>
+            ${s.created_at ? `
+            <div style="font-size:0.72rem; color:var(--text-muted); margin-top:4px; display:flex; align-items:center; gap:3px; white-space:nowrap;" title="Scraped & Added at ${escapeHtml(s.created_at)}">
+              <i data-lucide="clock" style="width:10px;height:10px;color:var(--text-dim);"></i>
+              <span>${formatEUScrapedDate(s.created_at)}</span>
+            </div>` : ""}
           </td>
           <td class="eu-tag-text">
             ${tagsList}
@@ -1056,22 +1081,140 @@ document.addEventListener("DOMContentLoaded", () => {
     window.loadEUStartups(1);
   }
 
+  const euBtnSearchInline = document.getElementById("eu-btn-search-inline");
+  const euBtnDiscoverOpen = document.getElementById("eu-btn-discover-open");
+  const euDiscoverModal = document.getElementById("eu-discover-modal");
+  const btnCloseDiscoverModal = document.getElementById("btn-close-discover-modal");
+  const btnCancelDiscover = document.getElementById("btn-cancel-discover");
+  const btnStartDiscover = document.getElementById("btn-start-discover");
+  const discoverTopic = document.getElementById("discover-topic");
+  const discoverCountry = document.getElementById("discover-country");
+  const discoverLimit = document.getElementById("discover-limit");
+  const discoverProgressBox = document.getElementById("discover-progress-box");
+  const discoverStatusText = document.getElementById("discover-status-text");
+
   if (euBtnApply) euBtnApply.addEventListener("click", () => window.loadEUStartups(1));
   if (euBtnReset) euBtnReset.addEventListener("click", resetEUFilters);
+  if (euBtnSearchInline) {
+    euBtnSearchInline.addEventListener("click", () => window.loadEUStartups(1));
+  }
+
+  let searchDebounceTimer = null;
   if (euSearch) {
+    euSearch.addEventListener("input", () => {
+      clearTimeout(searchDebounceTimer);
+      searchDebounceTimer = setTimeout(() => {
+        window.loadEUStartups(1);
+      }, 300);
+    });
     euSearch.addEventListener("keydown", (e) => {
       if (e.key === "Enter") {
         e.preventDefault();
+        clearTimeout(searchDebounceTimer);
         window.loadEUStartups(1);
       }
     });
   }
+
   if (euSort) euSort.addEventListener("change", () => window.loadEUStartups(1));
   if (euPerPage) euPerPage.addEventListener("change", () => window.loadEUStartups(1));
   if (euCountry) euCountry.addEventListener("change", () => window.loadEUStartups(1));
+  if (euState) euState.addEventListener("change", () => window.loadEUStartups(1));
+  if (euCity) euCity.addEventListener("change", () => window.loadEUStartups(1));
   if (euCategory) euCategory.addEventListener("change", () => window.loadEUStartups(1));
+  if (euRole) euRole.addEventListener("change", () => window.loadEUStartups(1));
   if (euHasWebsite) euHasWebsite.addEventListener("change", () => window.loadEUStartups(1));
   if (euHasEmail) euHasEmail.addEventListener("change", () => window.loadEUStartups(1));
+
+  // Discover Modal Handling
+  window.openDiscoverModal = function() {
+    if (!euDiscoverModal) return;
+    euDiscoverModal.style.display = "flex";
+    euDiscoverModal.classList.add("show");
+    if (discoverProgressBox) discoverProgressBox.style.display = "none";
+    if (btnStartDiscover) {
+      btnStartDiscover.disabled = false;
+      btnStartDiscover.innerHTML = `<i data-lucide="sparkles"></i> <span>Start Lead Discovery & Enrichment</span>`;
+      if (window.lucide) lucide.createIcons();
+    }
+  };
+
+  window.closeDiscoverModal = function() {
+    if (!euDiscoverModal) return;
+    euDiscoverModal.style.display = "none";
+    euDiscoverModal.classList.remove("show");
+  };
+
+  if (euBtnDiscoverOpen) {
+    euBtnDiscoverOpen.addEventListener("click", window.openDiscoverModal);
+  }
+
+  if (btnCloseDiscoverModal) btnCloseDiscoverModal.addEventListener("click", window.closeDiscoverModal);
+  if (btnCancelDiscover) btnCancelDiscover.addEventListener("click", window.closeDiscoverModal);
+  window.addEventListener("click", (e) => {
+    if (e.target === euDiscoverModal) {
+      window.closeDiscoverModal();
+    }
+  });
+
+  // Multi-Select Topic Chips
+  function updateDiscoverTopicFromChips() {
+    const activeChips = Array.from(document.querySelectorAll(".topic-chip.active"));
+    if (discoverTopic) {
+      if (activeChips.length > 0) {
+        const topics = activeChips.map(c => c.getAttribute("data-topic") || c.textContent.trim());
+        discoverTopic.value = topics.join(", ");
+      }
+    }
+  }
+
+  document.querySelectorAll(".topic-chip").forEach(chip => {
+    chip.addEventListener("click", () => {
+      chip.classList.toggle("active");
+      updateDiscoverTopicFromChips();
+    });
+  });
+
+  if (btnStartDiscover) {
+    btnStartDiscover.addEventListener("click", async () => {
+      const topic = (discoverTopic ? discoverTopic.value : "").trim();
+      const country = discoverCountry ? discoverCountry.value : "";
+      const limit = discoverLimit ? parseInt(discoverLimit.value, 10) || 5 : 5;
+
+      if (discoverProgressBox) discoverProgressBox.style.display = "block";
+      if (discoverStatusText) discoverStatusText.textContent = `Searching web for European '${topic || "Tech"}' startups & auto-enriching founders...`;
+      
+      btnStartDiscover.disabled = true;
+      btnStartDiscover.innerHTML = `<div class="spinner" style="width:16px;height:16px;border-width:2px;margin-right:6px;"></div> <span>Discovering Leads...</span>`;
+
+      try {
+        const params = new URLSearchParams({ topic, country, limit });
+        const res = await fetch(`${API_BASE}/api/eu-startups/discover?${params.toString()}`, {
+          method: "POST",
+        });
+
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.detail || "Failed to discover startups");
+        }
+
+        const data = await res.json();
+        showToast("success", `Discovered and auto-enriched ${data.discovered_count || 0} qualified European leads!`);
+        
+        // Refresh stats & table
+        await loadEUStats();
+        await window.loadEUStartups(1);
+        closeDiscoverModal();
+      } catch (err) {
+        showToast("error", `Discovery error: ${err.message}`);
+      } finally {
+        if (discoverProgressBox) discoverProgressBox.style.display = "none";
+        btnStartDiscover.disabled = false;
+        btnStartDiscover.innerHTML = `<i data-lucide="sparkles"></i> <span>Start Lead Discovery & Enrichment</span>`;
+        if (window.lucide) lucide.createIcons();
+      }
+    });
+  }
 
   // --- Initial Load ---
   fetchStats();
