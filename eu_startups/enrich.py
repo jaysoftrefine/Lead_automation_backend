@@ -28,10 +28,10 @@ except ImportError:
     TavilyClient = None
 
 try:
-    from duckduckgo_search import DDGS
+    from ddgs import DDGS
 except ImportError:
     try:
-        from ddgs import DDGS
+        from duckduckgo_search import DDGS
     except ImportError:
         DDGS = None
 
@@ -74,12 +74,26 @@ session = requests.Session(impersonate="chrome")
 GENERIC_EMAIL_PREFIXES = {
     "info", "support", "hello", "contact", "sales", "team", "help", 
     "press", "admin", "billing", "inquiries", "mail", "general",
-    "careers", "jobs", "office", "privacy", "security", "legal"
+    "careers", "jobs", "office", "privacy", "security", "legal",
+    "media", "marketing", "hi", "feedback", "service", "customer",
+    "enquiry", "enquiries", "hi", "hey", "post", "frontdesk"
 }
 
-# ============================================================
-# HELPERS
-# ============================================================
+DECISION_MAKER_KEYWORDS = [
+    "ceo", "founder", "co-founder", "cofounder", "co founder",
+    "cto", "director", "managing director", "coo", "pm", 
+    "product manager", "owner", "co-ceo", "vp", "president", 
+    "head of", "partner", "general manager", "cpo", "cio", "cso", 
+    "chief", "principal", "managing partner"
+]
+
+
+def is_decision_maker_role(role: Optional[str]) -> bool:
+    """Check if role matches an executive / decision-maker position."""
+    if not role or not isinstance(role, str):
+        return False
+    r_low = role.strip().lower()
+    return any(k in r_low for k in DECISION_MAKER_KEYWORDS)
 
 def get_connection() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
@@ -412,13 +426,16 @@ Return ONLY valid JSON matching this schema:
 }}
 """
 
-    models_to_try = [GEMINI_MODEL, "gemini-3.5-flash", "gemini-2.5-flash"]
+    models_to_try = [GEMINI_MODEL, "gemini-2.5-flash"]
     for model_name in models_to_try:
         try:
             response = gemini.models.generate_content(
                 model=model_name,
                 contents=prompt,
-                config={"temperature": 0.0},
+                config={
+                    "tools": [{"google_search": {}}],
+                    "temperature": 0.1,
+                },
             )
             cleaned = clean_json_response(response.text)
             parsed = json.loads(cleaned)
@@ -426,7 +443,18 @@ Return ONLY valid JSON matching this schema:
         except Exception as e:
             if "503" in str(e) or "404" in str(e):
                 continue
-            print(f"    Gemini error ({model_name}): {e}")
+            # Try without tools if tools failed
+            try:
+                response = gemini.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                    config={"temperature": 0.1},
+                )
+                cleaned = clean_json_response(response.text)
+                parsed = json.loads(cleaned)
+                return parsed
+            except Exception as e2:
+                print(f"    Gemini error ({model_name}): {e2}")
 
     return None
 
@@ -480,22 +508,43 @@ def persist_enrichment(
 
     saved_people = 0
     for p in people_list:
-        name = p.get("name")
-        if not name or name.strip().lower() in ("unknown", "n/a", "none", f"{company_name.lower()} contact", "company contact"):
+        name = (p.get("name") or "").strip()
+        if not name:
             continue
-        role = p.get("role") or "Leadership"
+
+        name_lower = name.lower()
+        # Discard invalid or company placeholder names
+        if (
+            name_lower in ("unknown", "n/a", "none", "founder", "leadership", "team", "admin", "contact")
+            or name_lower == company_name.lower()
+            or "leadership" in name_lower
+            or "founder /" in name_lower
+            or len(name) < 3
+        ):
+            continue
+
+        role = (p.get("role") or "").strip()
+        # Verify role is a genuine decision-maker
+        if not is_decision_maker_role(role):
+            continue
         
-        # Enforce direct personal email (reject generic info/support/hello for the person)
+        # Enforce direct personal email (strictly reject generic info/support/hello/contact)
         p_email = p.get("email")
-        if p_email and is_generic_email(p_email):
-            p_email = None
+        if p_email:
+            p_email_clean = p_email.strip().lower()
+            if is_generic_email(p_email_clean) or any(p_email_clean.startswith(g + "@") for g in GENERIC_EMAIL_PREFIXES):
+                p_email = None
+            else:
+                p_email = p_email_clean
 
         if not p_email and domain:
             # Derive direct personal founder email (firstname@domain)
             name_clean = re.sub(r"^(Dr\.|Prof\.|Mr\.|Ms\.|Mrs\.)\s*", "", name.strip(), flags=re.I)
             parts = [x.lower() for x in re.findall(r"[a-zA-Z]+", name_clean)]
-            if parts:
-                p_email = f"{parts[0]}@{domain}"
+            if parts and len(parts[0]) >= 2:
+                derived = f"{parts[0]}@{domain}"
+                if not is_generic_email(derived):
+                    p_email = derived
         
         # Enforce personal LinkedIn (/in/)
         raw_li = p.get("linkedin")
@@ -514,49 +563,14 @@ def persist_enrichment(
         """, (company_id, name.strip(), role.strip(), p_email, personal_li, source_urls))
         saved_people += 1
 
-    # ---------------------------------------------------------------
-    # FALLBACK: If Gemini found NO named people, synthesise a contact
-    # from emails discovered on the website or via domain derivation.
-    # This guarantees every enriched startup has at least one row.
-    # ---------------------------------------------------------------
-    if saved_people == 0:
-        # Try a real email discovered on the website first
-        fallback_email = None
-        discovered = list(direct_probe.get("emails", set()))
-        for e in discovered:
-            if not is_generic_email(e):
-                fallback_email = e
-                break
-        # Accept a generic company email if it's the only option
-        if not fallback_email and discovered:
-            fallback_email = discovered[0]
-        # Last resort: build contact@domain
-        if not fallback_email and domain:
-            fallback_email = f"contact@{domain}"
-
-        if fallback_email or domain:
-            # Derive a best-guess contact name from the company name
-            slug = re.sub(r"[^a-zA-Z ]", "", company_name).strip()
-            parts = slug.split()
-            fallback_name = " ".join(parts[:2]).title() if parts else company_name
-            fallback_role = "Founder / Leadership"
-
-            cur.execute("""
-                INSERT INTO people (startup_id, name, role, email, linkedin, source_url)
-                VALUES (?, ?, ?, ?, NULL, ?)
-                ON CONFLICT(startup_id, name, role)
-                DO UPDATE SET 
-                    email = COALESCE(excluded.email, people.email),
-                    source_url = excluded.source_url
-            """, (company_id, fallback_name, fallback_role, fallback_email, source_urls))
-
     # 3. Insert company emails into contacts table
     all_emails = set()
     primary_email = result.get("company_email")
-    if primary_email:
-        all_emails.add(primary_email)
+    if primary_email and not is_generic_email(primary_email):
+        all_emails.add(primary_email.strip().lower())
     for e in direct_probe.get("emails", []):
-        all_emails.add(e)
+        if not is_generic_email(e):
+            all_emails.add(e.strip().lower())
 
     for email_val in all_emails:
         cur.execute("""

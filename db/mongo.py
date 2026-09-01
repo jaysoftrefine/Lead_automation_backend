@@ -4,6 +4,16 @@ from typing import List, Optional, Dict, Any
 from pymongo import MongoClient, ASCENDING, DESCENDING
 from pymongo.errors import PyMongoError
 
+try:
+    import dns.resolver
+    # Fix macOS / IPv6 DNS timeout on mongodb+srv SRV lookups
+    dns.resolver.default_resolver = dns.resolver.Resolver(configure=False)
+    dns.resolver.default_resolver.nameservers = ["8.8.8.8", "8.8.4.4", "1.1.1.1", "1.0.0.1"]
+    dns.resolver.default_resolver.timeout = 4.0
+    dns.resolver.default_resolver.lifetime = 4.0
+except Exception:
+    pass
+
 from config.settings import settings
 from core.logging import logger
 from core.exceptions import DatabaseException

@@ -19,16 +19,8 @@ from typing import Dict, Optional
 
 
 AVAILABLE_VARIABLES = [
-    ("{{founder_name}}",    "Founder's full name"),
-    ("{{first_name}}",      "Founder's first name only"),
-    ("{{role}}",            "Founder's role / title"),
+    ("{{name}}",            "Recipient's name"),
     ("{{company_name}}",    "Company name"),
-    ("{{company_website}}", "Company website URL"),
-    ("{{city}}",            "Company city"),
-    ("{{country}}",         "Company country"),
-    ("{{category}}",        "Startup industry category"),
-    ("{{sender_name}}",     "Your name (from SMTP config)"),
-    ("{{email}}",           "Recipient email address"),
 ]
 
 
@@ -59,9 +51,13 @@ def build_context(
         parts = person_name.strip().split()
         first_name = parts[0] if parts else person_name
 
+    # Determine best available name (first name preferred, full name fallback)
+    best_name = first_name or person_name or ""
+
     return {
-        "founder_name":    person_name or "",
-        "first_name":      first_name,
+        "name":            best_name,
+        "first_name":      first_name or best_name,
+        "founder_name":    person_name or best_name,
         "role":            role or "",
         "company_name":    company_name or "",
         "company_website": website or "",
@@ -76,8 +72,9 @@ def build_context(
 def get_sample_context(sender_name: str = "Your Name") -> Dict[str, str]:
     """Returns sample context for template preview rendering."""
     return {
-        "founder_name":    "Jennifer Sharman",
+        "name":            "Jennifer",
         "first_name":      "Jennifer",
+        "founder_name":    "Jennifer Sharman",
         "role":            "Co-founder & CEO",
         "company_name":    "Linxei Ltd",
         "company_website": "https://linxei.com",
