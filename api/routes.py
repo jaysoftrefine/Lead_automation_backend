@@ -97,16 +97,20 @@ pipeline_state = PipelineState()
 class RunPipelineRequest(BaseModel):
     search_term: str = Field(..., example="Python Backend Developer")
     location: str = Field("Remote", example="Remote")
-    sites: List[str] = Field(default_factory=lambda: ["linkedin", "naukri"])
-    company_size: str = Field("small", example="small", description="Target company size: 'small' (1-50 employees), 'medium' (51-500), 'large' (500+), or 'all'")
-    job_type: Optional[str] = Field("all", example="contract", description="Target job type: 'all', 'contract' (freelance/C2C), 'fulltime', 'parttime', 'internship'")
-    limit: int = Field(10, ge=1, le=100)
+    sites: Optional[List[str]] = Field(default_factory=lambda: ["linkedin", "indeed"])
+    platforms: Optional[List[str]] = None
+    company_size: str = Field("all", example="all", description="Target company size: 'all', 'small' (1-50 employees), 'medium' (51-500), 'large' (500+)")
+    job_type: Optional[str] = Field("all", example="all", description="Target job type: 'all', 'contract' (freelance/C2C), 'fulltime', 'parttime', 'internship'")
+    limit: Optional[int] = Field(10, ge=1, le=100)
+    results_wanted: Optional[int] = None
     provider: Optional[str] = Field(None, example="gemini")
+    llm_provider: Optional[str] = None
     model: Optional[str] = Field(None, example="gemini-2.5-flash")
-    min_score: int = Field(30, ge=0, le=100)
-    hours_old: int = Field(72, ge=0)
+    model_name: Optional[str] = None
+    min_score: int = Field(20, ge=0, le=100)
+    hours_old: int = Field(168, ge=0)
     is_remote: bool = Field(True, description="Filter strictly for Remote positions within target location")
-    skip_existing: bool = Field(True, description="Skip jobs that already exist in database")
+    skip_existing: bool = Field(False, description="Skip jobs that already exist in database")
 
 
 class TestEnrichmentRequest(BaseModel):
@@ -129,17 +133,18 @@ class UpdateLeadStatusRequest(BaseModel):
 
 # --- Worker Function ---
 def _execute_pipeline_task(req: RunPipelineRequest):
-    pipeline_state.reset()
-    target_goal = req.limit or 10  # Target number of qualified leads desired
-    target_size = req.company_size or "small"
+    sites = req.sites or req.platforms or ["linkedin", "indeed"]
+    target_goal = req.limit or req.results_wanted or 10
+    target_size = req.company_size or "all"
     detected_job_type, effective_search_term = detect_job_type_filter(req.search_term, explicit_job_type=req.job_type)
     
     remote_tag = " [REMOTE ONLY]" if req.is_remote else ""
+    size_label = "ALL SIZES" if target_size == "all" else f"{target_size.upper()} [Max 50]"
     pipeline_state.add_log(
-        f"🎯 GOAL: Continuously scrape & evaluate until {target_goal} QUALIFIED leads are found (Location: '{req.location}'{remote_tag}, Size: {target_size.upper()} [Max 50], Job Type: {str(detected_job_type or 'all').upper()}, Min Score: {req.min_score})",
+        f"🎯 GOAL: Scrape & evaluate {target_goal} leads for '{req.search_term}' (Location: '{req.location}'{remote_tag}, Size: {size_label}, Min Score: {req.min_score})",
         "info"
     )
-    pipeline_state.add_log(f"Target platforms: {', '.join(req.sites)} in '{req.location}'", "info")
+    pipeline_state.add_log(f"Target platforms: {', '.join(sites)} in '{req.location}'", "info")
 
     try:
         # Connect to DB
@@ -147,9 +152,11 @@ def _execute_pipeline_task(req: RunPipelineRequest):
         pipeline_state.add_log("Connected to MongoDB successfully.", "info")
 
         # Initialize Agent
+        provider_name = req.provider or req.llm_provider or settings.default_llm_provider
+        model_name = req.model or req.model_name
         agent = LeadEnrichmentAgent(
-            provider_name=req.provider or settings.default_llm_provider,
-            model_name=req.model,
+            provider_name=provider_name,
+            model_name=model_name,
         )
 
         orchestrator = LeadGenOrchestrator(
@@ -160,17 +167,17 @@ def _execute_pipeline_task(req: RunPipelineRequest):
 
         pipeline_state.status = "scraping"
         
-        # Scrape a sufficiently wide pool of raw candidate listings to satisfy the qualified goal
-        raw_to_fetch = min(max(target_goal * 3, 20), 80)
+        # Scrape raw candidate listings
+        raw_to_fetch = min(max(target_goal * 2, 10), 50)
         
         # 1. Scrape Job Boards (JobSpy)
-        pipeline_state.add_log(f"📡 Scraping candidate jobs from {', '.join(req.sites)} in '{req.location}' (Remote: {req.is_remote})...", "info")
+        pipeline_state.add_log(f"📡 Scraping candidate jobs from {', '.join(sites)} in '{req.location}' (Remote: {req.is_remote})...", "info")
         raw_postings = orchestrator.scraper.scrape(
             search_term=effective_search_term,
             location=req.location,
             results_wanted=raw_to_fetch,
             hours_old=req.hours_old,
-            sites=req.sites,
+            sites=sites,
             job_type=detected_job_type,
             is_remote=req.is_remote,
         )
@@ -578,6 +585,7 @@ def delete_lead(url: str = Query(..., description="Job URL of the lead")):
 
 
 @router.post("/pipeline/run")
+@router.post("/pipeline/start")
 def trigger_pipeline(req: RunPipelineRequest, background_tasks: BackgroundTasks):
     """Trigger the scraping and enrichment pipeline asynchronously."""
     # Safety: Auto-clear stale running state if > 3 minutes
@@ -588,6 +596,10 @@ def trigger_pipeline(req: RunPipelineRequest, background_tasks: BackgroundTasks)
     if pipeline_state.is_running:
         raise HTTPException(status_code=409, detail="A pipeline task is already currently running. Click Stop or wait a moment.")
 
+    target_goal = req.limit or req.results_wanted or 10
+    pipeline_state.reset(total=target_goal)
+    pipeline_state.add_log(f"🚀 Initializing autonomous pipeline for '{req.search_term}'...", "info")
+
     thread = threading.Thread(target=_execute_pipeline_task, args=(req,), daemon=True)
     thread.start()
 
@@ -595,7 +607,7 @@ def trigger_pipeline(req: RunPipelineRequest, background_tasks: BackgroundTasks)
         "success": True,
         "message": "Pipeline started in background.",
         "search_term": req.search_term,
-        "limit": req.limit,
+        "limit": target_goal,
     }
 
 
