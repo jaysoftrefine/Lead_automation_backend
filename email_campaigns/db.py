@@ -86,17 +86,22 @@ def init_email_tables() -> None:
     # Saved Audiences / Recipient Lists
     cur.execute("""
         CREATE TABLE IF NOT EXISTS email_audiences (
-            id                TEXT PRIMARY KEY,
-            name              TEXT NOT NULL,
-            description       TEXT DEFAULT '',
-            sources           TEXT DEFAULT '["sqlite"]',
-            filters           TEXT DEFAULT '{}',
-            manual_recipients TEXT DEFAULT '[]',
-            contact_count     INTEGER DEFAULT 0,
-            created_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            id                  TEXT PRIMARY KEY,
+            name                TEXT NOT NULL,
+            description         TEXT DEFAULT '',
+            sources             TEXT DEFAULT '["sqlite"]',
+            filters             TEXT DEFAULT '{}',
+            manual_recipients   TEXT DEFAULT '[]',
+            selected_recipients TEXT DEFAULT '[]',
+            contact_count       INTEGER DEFAULT 0,
+            created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    try:
+        cur.execute("ALTER TABLE email_audiences ADD COLUMN selected_recipients TEXT DEFAULT '[]'")
+    except Exception:
+        pass
 
     # 1-by-1 Individual Review & Send Queue Items
     cur.execute("""

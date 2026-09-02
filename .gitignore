@@ -80,6 +80,7 @@ exports/
 output/
 data/raw/
 data/processed/
+uploads/
 
 # SQLite & local database files
 *.sqlite

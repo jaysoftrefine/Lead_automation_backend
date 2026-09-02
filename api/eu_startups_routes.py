@@ -101,7 +101,7 @@ def get_eu_startups(
     has_email: str = Query("", description="Filter by email availability (yes/no/any)"),
     role: str = Query("", description="Filter by person role"),
     page: int = Query(1, ge=1, description="Page number"),
-    per_page: int = Query(25, ge=1, le=100, description="Items per page"),
+    per_page: int = Query(25, ge=1, le=500, description="Items per page"),
     sort: str = Query("updated_at", description="Sort column"),
     direction: str = Query("desc", description="Sort direction (asc/desc)"),
 ) -> Dict[str, Any]:
@@ -116,6 +116,10 @@ def get_eu_startups(
         founded_max = founded_max.strip()
         has_website = has_website.strip()
         has_email = has_email.strip()
+        if has_email.lower() in ("true", "1"):
+            has_email = "yes"
+        elif has_email.lower() in ("false", "0"):
+            has_email = "no"
         role = role.strip()
         direction = direction.lower()
 

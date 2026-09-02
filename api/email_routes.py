@@ -22,6 +22,8 @@ from email_campaigns.campaign_runner import (
     launch_campaign,
     count_recipients,
     collect_recipients,
+    _get_recipients_from_sqlite,
+    _get_recipients_from_mongo,
 )
 
 router = APIRouter(prefix="/api/email", tags=["Email Campaigns"])
@@ -111,6 +113,7 @@ class AudienceCreate(BaseModel):
     sources: List[str] = ["sqlite"]
     filters: Dict[str, Any] = {}
     manual_recipients: Optional[List[Any]] = None
+    selected_recipients: Optional[List[Dict[str, Any]]] = None
 
 
 class AudienceUpdate(BaseModel):
@@ -119,6 +122,7 @@ class AudienceUpdate(BaseModel):
     sources: Optional[List[str]] = None
     filters: Optional[Dict[str, Any]] = None
     manual_recipients: Optional[List[Any]] = None
+    selected_recipients: Optional[List[Dict[str, Any]]] = None
 
 
 class QueueGenerateRequest(BaseModel):
@@ -171,6 +175,25 @@ async def upload_attachment(file: UploadFile = File(...)) -> Dict[str, Any]:
             "file_size_kb": file_size_kb,
         },
     }
+
+
+@router.get("/attachments")
+def list_attachments() -> Dict[str, Any]:
+    """List all available PDF attachments in uploads/attachments/."""
+    items = []
+    if ATTACHMENTS_DIR.exists():
+        for p in sorted(ATTACHMENTS_DIR.glob("*.pdf"), key=lambda x: x.stat().st_mtime, reverse=True):
+            clean_name = p.name
+            if "_" in clean_name and len(clean_name.split("_")[0]) == 10:
+                clean_name = "_".join(clean_name.split("_")[1:])
+            items.append({
+                "filename": p.name,
+                "display_name": clean_name,
+                "path": str(p),
+                "size_kb": round(p.stat().st_size / 1024, 1),
+                "modified_at": int(p.stat().st_mtime),
+            })
+    return {"status": "success", "data": items}
 
 
 # ─────────────────────────────────────────────
@@ -853,8 +876,93 @@ def get_campaign_logs(
 
 
 # ─────────────────────────────────────────────
-# Audience Management Endpoints
+# Audience Management & Contact Browsing Endpoints
 # ─────────────────────────────────────────────
+
+@router.get("/recipients/browse")
+def browse_recipients(
+    sources: str = "sqlite,mongo",
+    country: str = "",
+    category: str = "",
+    search: str = "",
+    page: int = 1,
+    per_page: int = 25,
+) -> Dict[str, Any]:
+    """Browse, search, and paginate available contacts from SQLite and MongoDB for audience selection (ImHUB style)."""
+    src_list = [s.strip().lower() for s in sources.split(",") if s.strip()]
+    filters: Dict[str, Any] = {}
+    if country.strip():
+        filters["country"] = country.strip()
+    if category.strip():
+        filters["category"] = category.strip()
+
+    all_recipients: List[Dict[str, Any]] = []
+    seen = set()
+
+    if "sqlite" in src_list:
+        for r in _get_recipients_from_sqlite(filters):
+            e = (r.get("email") or "").lower().strip()
+            if e and e not in seen:
+                seen.add(e)
+                all_recipients.append({
+                    "id": f"sqlite-{e}",
+                    "person_name": r.get("person_name") or "Founder / Leadership",
+                    "role": r.get("role") or "Leadership",
+                    "email": r.get("email") or "",
+                    "company_name": r.get("company_name") or "Startup",
+                    "website": r.get("website") or "",
+                    "city": r.get("city") or "",
+                    "country": r.get("country") or "",
+                    "category": r.get("category") or "",
+                    "source": "sqlite",
+                })
+
+    if "mongo" in src_list:
+        try:
+            for r in _get_recipients_from_mongo(filters):
+                e = (r.get("email") or "").lower().strip()
+                if e and e not in seen:
+                    seen.add(e)
+                    all_recipients.append({
+                        "id": f"mongo-{e}",
+                        "person_name": r.get("person_name") or "Contact",
+                        "role": r.get("role") or "Professional",
+                        "email": r.get("email") or "",
+                        "company_name": r.get("company_name") or "Company",
+                        "website": r.get("website") or "",
+                        "city": r.get("city") or "",
+                        "country": r.get("country") or "",
+                        "category": r.get("category") or "",
+                        "source": "mongo",
+                    })
+        except Exception:
+            pass
+
+    # Search filter
+    q = search.strip().lower()
+    if q:
+        filtered = []
+        for r in all_recipients:
+            haystack = f"{r['person_name']} {r['company_name']} {r['email']} {r['role']} {r['country']} {r['category']}".lower()
+            if q in haystack:
+                filtered.append(r)
+        all_recipients = filtered
+
+    total = len(all_recipients)
+    start = (page - 1) * per_page
+    end = start + per_page
+    page_items = all_recipients[start:end]
+
+    return {
+        "status": "success",
+        "data": {
+            "total": total,
+            "page": page,
+            "per_page": per_page,
+            "total_pages": max(1, (total + per_page - 1) // per_page),
+            "items": page_items,
+        },
+    }
 
 @router.get("/audiences")
 def list_audiences() -> Dict[str, Any]:
@@ -877,6 +985,10 @@ def list_audiences() -> Dict[str, Any]:
             d["manual_recipients"] = json.loads(d["manual_recipients"] or "[]")
         except Exception:
             d["manual_recipients"] = []
+        try:
+            d["selected_recipients"] = json.loads(d.get("selected_recipients") or "[]")
+        except Exception:
+            d["selected_recipients"] = []
         audiences.append(d)
     return {"status": "success", "data": audiences}
 
@@ -888,6 +1000,7 @@ def create_audience(payload: AudienceCreate) -> Dict[str, Any]:
     sources = payload.sources or ["sqlite"]
     filters = payload.filters or {}
     manual = payload.manual_recipients or []
+    selected = payload.selected_recipients or []
 
     raw_manual_emails = [
         m if isinstance(m, str) else (m.get("email") or "")
@@ -895,13 +1008,13 @@ def create_audience(payload: AudienceCreate) -> Dict[str, Any]:
     ]
     raw_manual_emails = [e for e in raw_manual_emails if e]
 
-    count = count_recipients(sources, filters, raw_manual_emails)
+    count = count_recipients(sources, filters, raw_manual_emails, selected_recipients=selected)
 
     conn = get_connection()
     conn.execute(
         """
-        INSERT INTO email_audiences (id, name, description, sources, filters, manual_recipients, contact_count)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO email_audiences (id, name, description, sources, filters, manual_recipients, selected_recipients, contact_count)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             aud_id,
@@ -910,6 +1023,7 @@ def create_audience(payload: AudienceCreate) -> Dict[str, Any]:
             json.dumps(sources),
             json.dumps(filters),
             json.dumps(manual),
+            json.dumps(selected),
             count,
         ),
     )
@@ -939,6 +1053,10 @@ def get_audience(aud_id: str) -> Dict[str, Any]:
         d["manual_recipients"] = json.loads(d["manual_recipients"] or "[]")
     except Exception:
         d["manual_recipients"] = []
+    try:
+        d["selected_recipients"] = json.loads(d.get("selected_recipients") or "[]")
+    except Exception:
+        d["selected_recipients"] = []
     return {"status": "success", "data": d}
 
 
@@ -957,6 +1075,7 @@ def update_audience(aud_id: str, payload: AudienceUpdate) -> Dict[str, Any]:
     sources = payload.sources if payload.sources is not None else json.loads(current["sources"] or "[]")
     filters = payload.filters if payload.filters is not None else json.loads(current["filters"] or "{}")
     manual = payload.manual_recipients if payload.manual_recipients is not None else json.loads(current["manual_recipients"] or "[]")
+    selected = payload.selected_recipients if payload.selected_recipients is not None else json.loads(current.get("selected_recipients") or "[]")
 
     raw_manual_emails = [
         m if isinstance(m, str) else (m.get("email") or "")
@@ -964,15 +1083,15 @@ def update_audience(aud_id: str, payload: AudienceUpdate) -> Dict[str, Any]:
     ]
     raw_manual_emails = [e for e in raw_manual_emails if e]
 
-    count = count_recipients(sources, filters, raw_manual_emails)
+    count = count_recipients(sources, filters, raw_manual_emails, selected_recipients=selected)
 
     conn.execute(
         """
         UPDATE email_audiences
-        SET name = ?, description = ?, sources = ?, filters = ?, manual_recipients = ?, contact_count = ?, updated_at = CURRENT_TIMESTAMP
+        SET name = ?, description = ?, sources = ?, filters = ?, manual_recipients = ?, selected_recipients = ?, contact_count = ?, updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
         """,
-        (name.strip(), desc, json.dumps(sources), json.dumps(filters), json.dumps(manual), count, aud_id),
+        (name.strip(), desc, json.dumps(sources), json.dumps(filters), json.dumps(manual), json.dumps(selected), count, aud_id),
     )
     conn.commit()
     conn.close()
@@ -1012,10 +1131,16 @@ def generate_review_queue(body: QueueGenerateRequest) -> Dict[str, Any]:
     if body.audience_id:
         aud = conn.execute("SELECT * FROM email_audiences WHERE id = ?", (body.audience_id,)).fetchone()
         if aud:
-            sources = json.loads(aud["sources"] or "[]")
-            filters = json.loads(aud["filters"] or "{}")
-            raw_recips = json.loads(aud["manual_recipients"] or "[]")
+            aud_dict = dict(aud)
+            sources = json.loads(aud_dict.get("sources") or "[]")
+            filters = json.loads(aud_dict.get("filters") or "{}")
+            raw_recips = json.loads(aud_dict.get("manual_recipients") or "[]")
             manual = [m if isinstance(m, str) else (m.get("email") or "") for m in raw_recips]
+            if not selected:
+                try:
+                    selected = json.loads(aud_dict.get("selected_recipients") or "[]")
+                except Exception:
+                    selected = None
 
     recipients = collect_recipients(
         audience_sources=sources,
