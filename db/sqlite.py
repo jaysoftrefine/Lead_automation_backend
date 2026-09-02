@@ -665,6 +665,61 @@ class SqliteManager:
                 pass
             self._conn = None
 
+    def verify_database_health(self) -> Dict[str, Any]:
+        """
+        Verify database file connectivity, run PRAGMA quick_check,
+        and verify that all expected tables exist across all modules.
+        Raises DatabaseException if verification fails.
+        """
+        if not self._db_path.parent.exists():
+            raise DatabaseException(f"Database directory does not exist: {self._db_path.parent}")
+
+        conn = self.get_connection()
+        try:
+            cur = conn.cursor()
+            # 1. Integrity check
+            cur.execute("PRAGMA quick_check")
+            check_res = cur.fetchone()
+            if not check_res or check_res[0] != "ok":
+                raise DatabaseException(f"SQLite PRAGMA quick_check failed: {check_res[0] if check_res else 'Unknown'}")
+
+            # 2. Enumerate existing tables
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+            existing_tables = set(r[0] for r in cur.fetchall())
+
+            # 3. Expected table groups
+            core_tables = {"enriched_leads", "raw_jobs", "job_leads"}
+            eu_tables = {"startups", "people", "contacts", "crawl_status"}
+            email_tables = {"email_templates", "email_campaigns", "email_campaign_logs", "smtp_config", "email_audiences", "email_queue_items"}
+            
+            all_expected = core_tables | eu_tables | email_tables
+            missing = all_expected - existing_tables
+            if missing:
+                raise DatabaseException(f"Database is missing critical tables: {sorted(list(missing))}")
+
+            # 4. Count records in tables for health report
+            table_counts: Dict[str, int] = {}
+            for tbl in sorted(existing_tables):
+                try:
+                    cur.execute(f"SELECT COUNT(*) FROM {tbl}")
+                    table_counts[tbl] = cur.fetchone()[0]
+                except Exception:
+                    table_counts[tbl] = -1
+
+            return {
+                "status": "healthy",
+                "db_path": str(self._db_path),
+                "integrity": "ok",
+                "table_count": len(existing_tables),
+                "tables": table_counts
+            }
+        except Exception as e:
+            if isinstance(e, DatabaseException):
+                raise
+            raise DatabaseException(f"Database health verification failed: {e}") from e
+        finally:
+            conn.close()
+
     def _format_lead_row(self, r: sqlite3.Row) -> Dict[str, Any]:
         """Convert a SQLite Row into a dictionary compatible with EnrichedLead JSON structure."""
         doc = dict(r)

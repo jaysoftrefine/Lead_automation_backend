@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 import uvicorn
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -14,6 +14,8 @@ from api.email_routes import router as email_router
 from config.settings import settings
 from core.logging import logger
 from db.sqlite import sqlite_manager
+from eu_startups.db import create_database as create_eu_database
+from email_campaigns.db import init_email_tables
 
 # Base directory
 BASE_DIR = Path(__file__).resolve().parent
@@ -56,12 +58,27 @@ app.include_router(email_router)
 
 @app.on_event("startup")
 async def startup_event():
-    """Initialize centralized SQLite database on startup."""
+    """Verify and initialize all database schemas on startup without fail."""
+    logger.info("Initializing and verifying database schemas...")
     try:
+        # 1. Initialize core lead tables (enriched_leads, raw_jobs, job_leads)
         sqlite_manager.connect()
-        logger.info(f"FastAPI Web Server started & SQLite initialized ({sqlite_manager.db_path}).")
+
+        # 2. Initialize EU startups tables (startups, people, contacts, crawl_status)
+        create_eu_database()
+
+        # 3. Initialize Email campaigns tables (templates, campaigns, logs, audiences, smtp)
+        init_email_tables()
+
+        # 4. Perform comprehensive integrity and schema verification
+        health = sqlite_manager.verify_database_health()
+        logger.info(
+            f"✅ Database startup check PASSED! Path: {health['db_path']}, "
+            f"Tables ({health['table_count']}): {list(health['tables'].keys())}"
+        )
     except Exception as e:
-        logger.warning(f"Startup SQLite initialization warning: {e}")
+        logger.critical(f"❌ DATABASE STARTUP CHECK FAILED: {e}", exc_info=True)
+        raise RuntimeError(f"Database startup check failed: {e}") from e
 
 
 @app.on_event("shutdown")
@@ -69,6 +86,23 @@ async def shutdown_event():
     """Clean up SQLite connection on shutdown."""
     sqlite_manager.close()
     logger.info("FastAPI Web Server shut down.")
+
+
+@app.get("/api/health")
+async def health_check():
+    """Health check endpoint verifying database readiness and tables."""
+    try:
+        health = sqlite_manager.verify_database_health()
+        return {
+            "status": "healthy",
+            "database": health
+        }
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        return JSONResponse(
+            status_code=503,
+            content={"status": "unhealthy", "message": str(e)}
+        )
 
 
 @app.get("/", response_class=HTMLResponse)
