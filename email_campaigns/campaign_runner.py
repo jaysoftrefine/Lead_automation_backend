@@ -49,7 +49,9 @@ def _get_recipients_from_sqlite(filters: Dict[str, Any]) -> List[Dict[str, Any]]
             s.website,
             s.city,
             s.country,
-            s.category
+            s.category,
+            s.description AS company_description,
+            s.tags        AS company_tags
         FROM people p
         JOIN startups s ON s.id = p.startup_id
         {where_sql}
@@ -277,6 +279,56 @@ def run_campaign_in_background(
     )
 
 
+def collect_recipients(
+    audience_sources: List[str],
+    audience_filters: Dict[str, Any],
+    manual_emails: Optional[List[str]] = None,
+    selected_recipients: Optional[List[Dict[str, Any]]] = None,
+    limit: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """Gather unique recipients across requested audience sources with optional limit."""
+    recipients: List[Dict[str, Any]] = []
+    seen_emails: set[str] = set()
+
+    if selected_recipients:
+        for r in selected_recipients:
+            e = (r.get("email") or "").lower().strip()
+            if e and e not in seen_emails:
+                seen_emails.add(e)
+                recipients.append(r)
+                if limit and len(recipients) >= limit:
+                    return recipients
+
+    if "manual" in audience_sources and manual_emails:
+        for r in _get_manual_recipients(manual_emails):
+            e = (r.get("email") or "").lower().strip()
+            if e and e not in seen_emails:
+                seen_emails.add(e)
+                recipients.append(r)
+                if limit and len(recipients) >= limit:
+                    return recipients
+
+    if "sqlite" in audience_sources:
+        for r in _get_recipients_from_sqlite(audience_filters):
+            e = (r.get("email") or "").lower().strip()
+            if e and e not in seen_emails:
+                seen_emails.add(e)
+                recipients.append(r)
+                if limit and len(recipients) >= limit:
+                    return recipients
+
+    if "mongo" in audience_sources:
+        for r in _get_recipients_from_mongo(audience_filters):
+            e = (r.get("email") or "").lower().strip()
+            if e and e not in seen_emails:
+                seen_emails.add(e)
+                recipients.append(r)
+                if limit and len(recipients) >= limit:
+                    return recipients
+
+    return recipients
+
+
 def launch_campaign(
     campaign_id: str,
     subject_template: str,
@@ -293,38 +345,12 @@ def launch_campaign(
     Build recipient list from requested sources and launch the campaign.
     Returns total recipient count.
     """
-    recipients: List[Dict[str, Any]] = []
-    seen_emails: set[str] = set()
-
-    # If explicitly selected contacts were provided
-    if selected_recipients:
-        for r in selected_recipients:
-            e = (r.get("email") or "").lower().strip()
-            if e and e not in seen_emails:
-                seen_emails.add(e)
-                recipients.append(r)
-
-    if "sqlite" in audience_sources:
-        for r in _get_recipients_from_sqlite(audience_filters):
-            e = (r.get("email") or "").lower().strip()
-            if e and e not in seen_emails:
-                seen_emails.add(e)
-                recipients.append(r)
-
-    if "mongo" in audience_sources:
-        for r in _get_recipients_from_mongo(audience_filters):
-            e = (r.get("email") or "").lower().strip()
-            if e and e not in seen_emails:
-                seen_emails.add(e)
-                recipients.append(r)
-
-    if "manual" in audience_sources and manual_emails:
-        for r in _get_manual_recipients(manual_emails):
-            e = (r.get("email") or "").lower().strip()
-            if e and e not in seen_emails:
-                seen_emails.add(e)
-                recipients.append(r)
-
+    recipients = collect_recipients(
+        audience_sources=audience_sources,
+        audience_filters=audience_filters,
+        manual_emails=manual_emails,
+        selected_recipients=selected_recipients,
+    )
     total = len(recipients)
     _update_campaign(campaign_id, total=total, status="queued")
 

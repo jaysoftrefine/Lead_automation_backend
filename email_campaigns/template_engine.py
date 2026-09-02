@@ -51,8 +51,11 @@ def build_context(
     category: Optional[str] = None,
     sender_name: Optional[str] = None,
     email: Optional[str] = None,
+    company_description: Optional[str] = None,
+    company_tags: Optional[str] = None,
     ai_company_hook: Optional[str] = None,
     ai_value_pitch: Optional[str] = None,
+    use_ai: bool = True,
 ) -> Dict[str, str]:
     """Build the variable resolution context for a single recipient."""
     first_name = ""
@@ -60,9 +63,29 @@ def build_context(
         parts = person_name.strip().split()
         first_name = parts[0] if parts else person_name
 
-    # Determine best available name (first name preferred, fallback to 'there')
     best_name = first_name or person_name or "there"
     c_name = company_name or "your company"
+
+    hook = ai_company_hook
+    pitch = ai_value_pitch
+
+    # If AI hook or pitch not provided, generate with Gemini
+    if use_ai and company_name and (not hook or not pitch):
+        try:
+            from email_campaigns.ai_personalizer import generate_ai_hook_and_pitch
+            ai_data = generate_ai_hook_and_pitch(
+                company_name=company_name,
+                recipient_name=person_name,
+                role=role,
+                website=website,
+                description=company_description,
+                tags=company_tags,
+                category=category,
+            )
+            hook = hook or ai_data.get("ai_company_hook")
+            pitch = pitch or ai_data.get("ai_value_pitch")
+        except Exception:
+            pass
 
     default_hook = (
         f"I recently came across {c_name} and really liked how you're driving innovation in your product ecosystem. "
@@ -89,8 +112,8 @@ def build_context(
         "category":            category or "",
         "sender_name":         sender_name or "Stephan Arnas",
         "email":               email or "",
-        "ai_company_hook":     ai_company_hook or default_hook,
-        "ai_value_pitch":      ai_value_pitch or default_pitch,
+        "ai_company_hook":     hook or default_hook,
+        "ai_value_pitch":      pitch or default_pitch,
     }
 
 
@@ -117,7 +140,7 @@ def text_to_html_email(text: str) -> str:
     """Convert a plain text or markdown email body into styled HTML compatible with email clients and preview."""
     if not text:
         return ""
-    if "<html" in text.lower() or "<body" in text.lower() or "<table" in text.lower():
+    if any(tag in text.lower() for tag in ["<html", "<body", "<table", "<div", "<p "]):
         return text
 
     blocks = re.split(r"\n\s*\n", text.strip())
