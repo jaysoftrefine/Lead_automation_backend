@@ -1,5 +1,6 @@
 # Core dependencies
 python-jobspy>=1.1.58
+pandas>=2.0.0
 pydantic>=2.7.0
 pydantic-settings>=2.2.0
 python-dotenv>=1.0.1
@@ -7,9 +8,12 @@ loguru>=0.7.2
 rich>=13.7.1
 click>=8.1.7
 
-# MongoDB
+# Database (SQLite central + legacy MongoDB support)
 pymongo>=4.7.0
 motor>=3.4.0
+
+# DNS MX & SMTP Verification
+dnspython>=2.6.0
 
 # LangChain & LLM Providers
 langchain>=0.2.0
@@ -18,9 +22,11 @@ langchain-community>=0.2.0
 langchain-google-genai>=1.0.5
 langchain-nvidia-ai-endpoints>=0.1.2
 langgraph>=0.2.0
+google-genai>=0.1.0
 
-# Search Tool
+# Search & Research Tools
 tavily-python>=0.3.3
+duckduckgo-search>=6.0.0
 
 # Web Server & API
 fastapi>=0.110.0
@@ -30,8 +36,8 @@ python-multipart>=0.0.9
 # LinkedIn Feed API
 linkedin-api>=2.3.1
 
-# EU Startups Explorer & Scraper
+# Web Scraping & Crawling
 beautifulsoup4>=4.12.2
 curl-cffi>=0.5.9
-google-genai>=0.1.0
+lxml>=5.0.0
 
