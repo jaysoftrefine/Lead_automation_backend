@@ -13,7 +13,7 @@ from api.eu_startups_routes import router as eu_startups_router
 from api.email_routes import router as email_router
 from config.settings import settings
 from core.logging import logger
-from db.mongo import mongo_manager
+from db.sqlite import sqlite_manager
 
 # Base directory
 BASE_DIR = Path(__file__).resolve().parent
@@ -56,18 +56,18 @@ app.include_router(email_router)
 
 @app.on_event("startup")
 async def startup_event():
-    """Attempt initial MongoDB connection on startup."""
+    """Initialize centralized SQLite database on startup."""
     try:
-        mongo_manager.connect()
-        logger.info("FastAPI Web Server started & MongoDB initialized.")
+        sqlite_manager.connect()
+        logger.info(f"FastAPI Web Server started & SQLite initialized ({sqlite_manager.db_path}).")
     except Exception as e:
-        logger.warning(f"Startup MongoDB connection warning (will retry on demand): {e}")
+        logger.warning(f"Startup SQLite initialization warning: {e}")
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    """Clean up MongoDB connection on shutdown."""
-    mongo_manager.close()
+    """Clean up SQLite connection on shutdown."""
+    sqlite_manager.close()
     logger.info("FastAPI Web Server shut down.")
 
 

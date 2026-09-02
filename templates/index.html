@@ -43,7 +43,7 @@
         <div class="system-status-group">
           <div id="mongo-status-pill" class="status-pill checking">
             <span class="status-dot"></span>
-            <span class="status-text">MongoDB: Checking...</span>
+            <span class="status-text">SQLite: Checking...</span>
           </div>
           <div id="llm-status-pill" class="status-pill info">
             <i data-lucide="cpu" class="pill-icon"></i>
@@ -369,7 +369,7 @@
                   <i data-lucide="download"></i>
                   <span>Export CSV</span>
                 </a>
-                <button id="btn-clear-db-ui" class="btn btn-secondary btn-sm" style="color: #fb7185; border-color: rgba(244, 63, 94, 0.4);" title="Clear all saved leads from MongoDB">
+                <button id="btn-clear-db-ui" class="btn btn-secondary btn-sm" style="color: #fb7185; border-color: rgba(244, 63, 94, 0.4);" title="Clear all saved leads from SQLite">
                   <i data-lucide="trash-2"></i>
                   <span>Clear DB</span>
                 </button>
@@ -384,7 +384,7 @@
           <div class="leads-results-wrapper">
             <div id="leads-loading-spinner" class="loading-state" style="display: none;">
               <div class="spinner"></div>
-              <span>Fetching qualified leads from MongoDB...</span>
+              <span>Fetching qualified leads from SQLite...</span>
             </div>
 
             <div id="leads-empty-state" class="empty-state" style="display: none;">
@@ -870,7 +870,7 @@
                     </label>
                     <label class="checkbox-chip">
                       <input type="checkbox" name="camp-source" value="mongo">
-                      <span class="chip-content"><i data-lucide="briefcase"></i> LinkedIn Leads DB</span>
+                      <span class="chip-content"><i data-lucide="briefcase"></i> LinkedIn Leads (SQLite)</span>
                     </label>
                     <label class="checkbox-chip">
                       <input type="checkbox" name="camp-source" value="manual">

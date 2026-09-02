@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 from config.settings import settings
 from core.logging import logger
 from core.company_filter import is_matching_company_size, classify_company_size, detect_job_type_filter
-from db.mongo import mongo_manager
+from db.sqlite import sqlite_manager
 from db.models import RawJobPosting, EnrichedLead
 from enrichment.agent import LeadEnrichmentAgent
 from pipeline.orchestrator import LeadGenOrchestrator, PipelineMetrics
@@ -148,8 +148,8 @@ def _execute_pipeline_task(req: RunPipelineRequest):
 
     try:
         # Connect to DB
-        mongo_manager.connect()
-        pipeline_state.add_log("Connected to MongoDB successfully.", "info")
+        sqlite_manager.connect()
+        pipeline_state.add_log("Connected to centralized SQLite database successfully.", "info")
 
         # Initialize Agent
         provider_name = req.provider or req.llm_provider or settings.default_llm_provider
@@ -161,7 +161,7 @@ def _execute_pipeline_task(req: RunPipelineRequest):
 
         orchestrator = LeadGenOrchestrator(
             agent=agent,
-            db=mongo_manager,
+            db=sqlite_manager,
             min_relevance_score=req.min_score,
         )
 
@@ -228,12 +228,12 @@ def _execute_pipeline_task(req: RunPipelineRequest):
             )
 
             # Save raw job
-            mongo_manager.save_raw_job(job)
+            sqlite_manager.save_raw_job(job)
 
             # Check duplicate (if skip_existing is True)
-            if req.skip_existing and mongo_manager.job_exists(job.job_url):
+            if req.skip_existing and sqlite_manager.job_exists(job.job_url):
                 pipeline_state.add_log(
-                    f"⏭️ SKIPPED (Duplicate): '{job.company}' - already exists in MongoDB database. (Uncheck 'Skip Duplicates' to force re-enrich)",
+                    f"⏭️ SKIPPED (Duplicate): '{job.company}' - already exists in SQLite database. (Uncheck 'Skip Duplicates' to force re-enrich)",
                     "warning"
                 )
                 metrics.already_existing += 1
@@ -254,7 +254,7 @@ def _execute_pipeline_task(req: RunPipelineRequest):
                         "warning"
                     )
                     metrics.rejected_by_llm += 1
-                    mongo_manager.upsert_enriched_lead(enriched_lead)
+                    sqlite_manager.upsert_enriched_lead(enriched_lead)
                     continue
 
                 if enriched_lead.relevance_score < req.min_score:
@@ -275,7 +275,7 @@ def _execute_pipeline_task(req: RunPipelineRequest):
                     metrics.rejected_by_llm += 1
                     continue
 
-                mongo_manager.upsert_enriched_lead(enriched_lead)
+                sqlite_manager.upsert_enriched_lead(enriched_lead)
                 metrics.saved_to_db += 1
                 pipeline_state.processed_count = metrics.saved_to_db
                 contacts_found = len(enriched_lead.contacts)
@@ -320,10 +320,10 @@ def _execute_pipeline_task(req: RunPipelineRequest):
 
 @router.post("/database/clear")
 def clear_database_api():
-    """Clear all enriched leads and raw jobs from MongoDB."""
+    """Clear all enriched leads and raw jobs from centralized SQLite database."""
     try:
-        mongo_manager.connect()
-        res = mongo_manager.clear_database()
+        sqlite_manager.connect()
+        res = sqlite_manager.clear_database()
         return {
             "success": True,
             "leads_deleted": res.get("leads_deleted", 0),
@@ -334,50 +334,24 @@ def clear_database_api():
         logger.error(f"Error clearing database: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @router.get("/stats")
 def get_stats():
     """Get system statistics, database counts, and configuration status."""
-    db_connected = False
-    leads_count = 0
-    raw_count = 0
-    total_contacts = 0
-    avg_score = 0.0
-
-    try:
-        mongo_manager.connect()
-        if mongo_manager.leads_collection is not None and mongo_manager.raw_jobs_collection is not None:
-            db_connected = True
-            leads_count = mongo_manager.leads_collection.count_documents({})
-            raw_count = mongo_manager.raw_jobs_collection.count_documents({})
-
-            # Aggregate total contacts and average score
-            pipeline = [
-                {
-                    "$group": {
-                        "_id": None,
-                        "avg_score": {"$avg": "$relevance_score"},
-                        "total_contacts": {"$sum": {"$size": {"$ifNull": ["$contacts", []]}}}
-                    }
-                }
-            ]
-            agg_result = list(mongo_manager.leads_collection.aggregate(pipeline))
-            if agg_result:
-                avg_score = round(agg_result[0].get("avg_score") or 0.0, 1)
-                total_contacts = agg_result[0].get("total_contacts") or 0
-    except Exception as e:
-        logger.warning(f"Stats check error: {e}")
+    sqlite_manager.connect()
+    db_stats = sqlite_manager.get_stats()
 
     return {
-        "db_connected": db_connected,
-        "database_name": settings.mongodb_db_name,
+        "db_connected": db_stats.get("db_connected", True),
+        "database_name": db_stats.get("database_name", "SQLite"),
         "default_provider": settings.default_llm_provider,
         "gemini_configured": bool(settings.google_api_key and settings.google_api_key != "your_google_api_key_here"),
         "nvidia_configured": bool(settings.nvidia_api_key and settings.nvidia_api_key != "your_nvidia_api_key_here"),
         "tavily_configured": bool(settings.tavily_api_key and settings.tavily_api_key != "your_tavily_api_key_here"),
-        "leads_count": leads_count,
-        "raw_jobs_count": raw_count,
-        "total_contacts_discovered": total_contacts,
-        "avg_relevance_score": avg_score,
+        "leads_count": db_stats.get("leads_count", 0),
+        "raw_jobs_count": db_stats.get("raw_jobs_count", 0),
+        "total_contacts_discovered": db_stats.get("total_contacts_discovered", 0),
+        "avg_relevance_score": db_stats.get("avg_relevance_score", 0.0),
         "is_pipeline_running": pipeline_state.is_running,
     }
 
@@ -395,132 +369,21 @@ def get_leads(
     limit: int = Query(50, ge=1, le=200),
     page: int = Query(1, ge=1),
 ):
-    """Retrieve filtered, paginated list of enriched leads."""
+    """Retrieve filtered, paginated list of enriched leads from SQLite."""
     try:
-        mongo_manager.connect()
-        query: Dict[str, Any] = {}
-
-        if min_score > 0:
-            query["relevance_score"] = {"$gte": min_score}
-
-        if site and site.lower() != "all":
-            query["site"] = site.lower()
-
-        if status and status.lower() != "all":
-            query["status"] = status.lower()
-
-        if has_contacts is True:
-            query["contacts.0"] = {"$exists": True}
-
-        # Date / Recency Filter
-        if hours_old and hours_old > 0:
-            time_cutoff = datetime.utcnow() - timedelta(hours=hours_old)
-            if "$and" not in query:
-                query["$and"] = []
-            query["$and"].append({"created_at": {"$gte": time_cutoff}})
-
-        # Strict Company Size Filter (Small = MAX 50 employees: 1-10, 11-50)
-        if company_size and company_size.lower() != "all":
-            c_size = company_size.lower().strip()
-            if c_size == "small":
-                size_cond = {
-                    "$and": [
-                        {
-                            "$or": [
-                                {"company_size": {"$regex": r"\b(1-10|11-50|1-50|1-20|startup|seed|micro|boutique)\b", "$options": "i"}},
-                                {"company_size": None},
-                                {"company_size": "Unspecified"},
-                                {"company_size": "Unknown"},
-                            ]
-                        },
-                        {
-                            "company_size": {"$not": {"$regex": r"\b(51-200|201-500|501-1000|500\+|1000\+|enterprise)\b", "$options": "i"}}
-                        }
-                    ]
-                }
-            elif c_size == "medium":
-                size_cond = {
-                    "company_size": {"$regex": r"\b(51-200|201-500|501-1000|201-1000|200-500|medium|mid)\b", "$options": "i"}
-                }
-            elif c_size == "large":
-                size_cond = {
-                    "company_size": {"$regex": r"\b(500\+|1000\+|5000\+|10000\+|enterprise|corporation|corporate|fortune)\b", "$options": "i"}
-                }
-            else:
-                size_cond = None
-
-            if size_cond:
-                if "$and" not in query:
-                    query["$and"] = []
-                query["$and"].append(size_cond)
-
-        # Job Type Filter
-        if job_type and job_type.lower() != "all":
-            jt = job_type.lower().strip()
-            if jt in ("contract", "freelance"):
-                jt_cond = {
-                    "$or": [
-                        {"job_type": {"$regex": "contract|freelance|c2c|corp|gig|part-time|outside ir35", "$options": "i"}},
-                        {"title": {"$regex": "contract|freelance|c2c|gig|outside ir35", "$options": "i"}}
-                    ]
-                }
-            else:
-                jt_cond = {"job_type": {"$regex": jt, "$options": "i"}}
-            if "$and" not in query:
-                query["$and"] = []
-            query["$and"].append(jt_cond)
-
-        if search:
-            regex_search = {"$regex": search, "$options": "i"}
-            search_cond = {
-                "$or": [
-                    {"title": regex_search},
-                    {"company": regex_search},
-                    {"key_technologies": regex_search},
-                    {"contacts.name": regex_search},
-                    {"contacts.email": regex_search},
-                ]
-            }
-            if "$and" not in query:
-                query["$and"] = []
-            query["$and"].append(search_cond)
-
-        if mongo_manager.leads_collection is None:
-            return {
-                "total": 0,
-                "page": page,
-                "limit": limit,
-                "total_pages": 0,
-                "leads": [],
-            }
-
-        total_matching = mongo_manager.leads_collection.count_documents(query)
-        skip = (page - 1) * limit
-
-        cursor = (
-            mongo_manager.leads_collection.find(query)
-            .sort("created_at", -1)
-            .skip(skip)
-            .limit(limit)
+        sqlite_manager.connect()
+        return sqlite_manager.get_leads(
+            search=search,
+            site=site,
+            status=status,
+            company_size=company_size,
+            job_type=job_type,
+            hours_old=hours_old,
+            min_score=min_score,
+            has_contacts=has_contacts,
+            limit=limit,
+            page=page,
         )
-
-        leads = []
-        for doc in cursor:
-            doc["_id"] = str(doc.get("_id", ""))
-            if "created_at" in doc and isinstance(doc["created_at"], datetime):
-                doc["created_at"] = doc["created_at"].isoformat()
-            if "updated_at" in doc and isinstance(doc["updated_at"], datetime):
-                doc["updated_at"] = doc["updated_at"].isoformat()
-            leads.append(doc)
-
-        return {
-            "total": total_matching,
-            "page": page,
-            "limit": limit,
-            "total_pages": (total_matching + limit - 1) // limit if limit else 1,
-            "leads": leads,
-        }
-
     except Exception as e:
         logger.error(f"Error fetching leads: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -530,17 +393,10 @@ def get_leads(
 def get_lead_by_url(url: str = Query(..., description="Job URL of the lead")):
     """Get single enriched lead details."""
     try:
-        mongo_manager.connect()
-        doc = mongo_manager.leads_collection.find_one({"job_url": url})
+        sqlite_manager.connect()
+        doc = sqlite_manager.get_lead_by_url(url)
         if not doc:
             raise HTTPException(status_code=404, detail="Lead not found")
-
-        doc["_id"] = str(doc.get("_id", ""))
-        if "created_at" in doc and isinstance(doc["created_at"], datetime):
-            doc["created_at"] = doc["created_at"].isoformat()
-        if "updated_at" in doc and isinstance(doc["updated_at"], datetime):
-            doc["updated_at"] = doc["updated_at"].isoformat()
-
         return doc
     except HTTPException:
         raise
@@ -553,12 +409,9 @@ def get_lead_by_url(url: str = Query(..., description="Job URL of the lead")):
 def update_lead_status(req: UpdateLeadStatusRequest):
     """Update lead status (new, contacted, qualified, rejected, archived)."""
     try:
-        mongo_manager.connect()
-        res = mongo_manager.leads_collection.update_one(
-            {"job_url": req.job_url},
-            {"$set": {"status": req.status, "updated_at": datetime.utcnow()}}
-        )
-        if res.matched_count == 0:
+        sqlite_manager.connect()
+        updated = sqlite_manager.update_lead_status(req.job_url, req.status)
+        if not updated:
             raise HTTPException(status_code=404, detail="Lead not found")
         return {"success": True, "status": req.status}
     except HTTPException:
@@ -570,11 +423,11 @@ def update_lead_status(req: UpdateLeadStatusRequest):
 
 @router.delete("/lead")
 def delete_lead(url: str = Query(..., description="Job URL of the lead")):
-    """Delete an enriched lead from database."""
+    """Delete an enriched lead from SQLite database."""
     try:
-        mongo_manager.connect()
-        res = mongo_manager.leads_collection.delete_one({"job_url": url})
-        if res.deleted_count == 0:
+        sqlite_manager.connect()
+        deleted = sqlite_manager.delete_lead(url)
+        if not deleted:
             raise HTTPException(status_code=404, detail="Lead not found")
         return {"success": True, "message": "Lead deleted successfully"}
     except HTTPException:
@@ -666,10 +519,10 @@ def test_enrichment_direct(req: TestEnrichmentRequest):
         # Save to DB if requested
         if req.save_to_db:
             try:
-                mongo_manager.connect()
-                mongo_manager.upsert_enriched_lead(lead)
+                sqlite_manager.connect()
+                sqlite_manager.upsert_enriched_lead(lead)
             except Exception as db_err:
-                logger.warning(f"Could not persist test lead to Mongo: {db_err}")
+                logger.warning(f"Could not persist test lead to SQLite: {db_err}")
 
         lead_dict = lead.model_dump()
         lead_dict["created_at"] = lead.created_at.isoformat()
@@ -695,63 +548,17 @@ def export_leads_csv(
 ):
     """Export enriched leads to a downloadable CSV file."""
     try:
-        mongo_manager.connect()
-        query: Dict[str, Any] = {}
-        if min_score > 0:
-            query["relevance_score"] = {"$gte": min_score}
-        if site and site.lower() != "all":
-            query["site"] = site.lower()
-        if status and status.lower() != "all":
-            query["status"] = status.lower()
-
-        if hours_old and hours_old > 0:
-            time_cutoff = datetime.utcnow() - timedelta(hours=hours_old)
-            if "$and" not in query:
-                query["$and"] = []
-            query["$and"].append({"created_at": {"$gte": time_cutoff}})
-
-        if company_size and company_size.lower() != "all":
-            c_size = company_size.lower().strip()
-            if c_size == "small":
-                size_cond = {
-                    "$and": [
-                        {
-                            "$or": [
-                                {"company_size": {"$regex": r"\b(1-10|11-50|1-50|1-20|startup|seed|micro|boutique)\b", "$options": "i"}},
-                                {"company_size": None},
-                                {"company_size": "Unspecified"},
-                                {"company_size": "Unknown"},
-                            ]
-                        },
-                        {
-                            "company_size": {"$not": {"$regex": r"\b(51-200|201-500|501-1000|500\+|1000\+|enterprise)\b", "$options": "i"}}
-                        }
-                    ]
-                }
-                if "$and" not in query:
-                    query["$and"] = []
-                query["$and"].append(size_cond)
-            elif c_size == "medium":
-                query["company_size"] = {"$regex": r"\b(51-200|201-500|501-1000|201-1000|200-500|medium|mid)\b", "$options": "i"}
-            elif c_size == "large":
-                query["company_size"] = {"$regex": r"\b(500\+|1000\+|5000\+|10000\+|enterprise|corporation|corporate|fortune)\b", "$options": "i"}
-
-        if job_type and job_type.lower() != "all":
-            jt = job_type.lower().strip()
-            if jt in ("contract", "freelance"):
-                jt_cond = {
-                    "$or": [
-                        {"job_type": {"$regex": "contract|freelance|c2c|corp|gig|part-time|outside ir35", "$options": "i"}},
-                        {"title": {"$regex": "contract|freelance|c2c|gig|outside ir35", "$options": "i"}}
-                    ]
-                }
-            else:
-                jt_cond = {"job_type": {"$regex": jt, "$options": "i"}}
-            if "$and" not in query:
-                query["$and"] = []
-            query["$and"].append(jt_cond)
-
-        leads = list(mongo_manager.leads_collection.find(query).sort("created_at", -1))
+        sqlite_manager.connect()
+        res = sqlite_manager.get_leads(
+            site=site,
+            status=status,
+            company_size=company_size,
+            job_type=job_type,
+            hours_old=hours_old,
+            min_score=min_score,
+            limit=10000,
+        )
+        leads = res.get("leads", [])
 
         output = io.StringIO()
         writer = csv.writer(output)

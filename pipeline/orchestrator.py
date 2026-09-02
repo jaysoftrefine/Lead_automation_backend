@@ -7,7 +7,7 @@ import time
 from core.logging import logger
 from core.company_filter import is_matching_company_size, classify_company_size, detect_job_type_filter
 from config.settings import settings
-from db.mongo import MongoManager, mongo_manager
+from db.sqlite import SqliteManager, sqlite_manager
 from db.models import RawJobPosting, EnrichedLead
 from scraper.base import BaseScraper
 from scraper.jobspy_scraper import JobSpyScraper
@@ -44,22 +44,22 @@ class LeadGenOrchestrator:
     """
     Coordinates the full end-to-end workflow:
     1. Scrapes job listings from LinkedIn & Naukri via JobSpy with job_type filtering.
-    2. Persists raw jobs and performs deduplication checks.
+    2. Persists raw jobs and performs deduplication checks in SQLite.
     3. Feeds new jobs one-by-one to the LLM thinking agent with target company size (max 50) and job type heuristics.
     4. Executes live Tavily web research to locate company size, recruiters, and contact details.
-    5. Filters leads based on qualification, company size, and job type criteria and stores strictly structured leads into MongoDB.
+    5. Filters leads based on qualification, company size, and job type criteria and stores strictly structured leads into SQLite.
     """
 
     def __init__(
         self,
         scraper: Optional[BaseScraper] = None,
         agent: Optional[LeadEnrichmentAgent] = None,
-        db: Optional[MongoManager] = None,
+        db: Optional[SqliteManager] = None,
         min_relevance_score: int = 30,
     ):
         self.scraper = scraper or JobSpyScraper()
         self.agent = agent or LeadEnrichmentAgent()
-        self.db = db or mongo_manager
+        self.db = db or sqlite_manager
         self.min_relevance_score = min_relevance_score
 
     def run(
@@ -155,7 +155,7 @@ class LeadGenOrchestrator:
 
             # Deduplication check
             if skip_existing and self.db.job_exists(job.job_url):
-                logger.info(f"⏭️  SKIPPED [Duplicate]: '{job.company}' - already exists in MongoDB database.")
+                logger.info(f"⏭️  SKIPPED [Duplicate]: '{job.company}' - already exists in SQLite database.")
                 metrics.already_existing += 1
                 continue
 
@@ -194,7 +194,7 @@ class LeadGenOrchestrator:
                     metrics.rejected_by_llm += 1
                     continue
 
-                # Save qualified enriched lead to MongoDB
+                # Save qualified enriched lead to SQLite
                 self.db.upsert_enriched_lead(enriched_lead)
                 metrics.saved_to_db += 1
                 contacts_count = len(enriched_lead.contacts)

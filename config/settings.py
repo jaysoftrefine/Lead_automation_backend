@@ -16,25 +16,32 @@ class Settings(BaseSettings):
         populate_by_name=True,
     )
 
-    # MongoDB Settings
-    mongodb_uri: str = Field(
+    # SQLite Central Database Settings
+    sqlite_db_path: str = Field(
+        default="data/eu_startups.db",
+        description="Path to centralized SQLite database file",
+        alias="SQLITE_DB_PATH"
+    )
+
+    # Legacy MongoDB Settings (Optional, deprecated)
+    mongodb_uri: Optional[str] = Field(
         default="mongodb://localhost:27017",
-        description="MongoDB connection string URI",
+        description="MongoDB connection string URI (deprecated)",
         alias="MONGODB_URI"
     )
-    mongodb_db_name: str = Field(
+    mongodb_db_name: Optional[str] = Field(
         default="lead_gen_db",
-        description="MongoDB database name",
+        description="MongoDB database name (deprecated)",
         alias="MONGODB_DB_NAME"
     )
-    mongodb_collection_name: str = Field(
+    mongodb_collection_name: Optional[str] = Field(
         default="enriched_leads",
-        description="Collection for fully enriched leads",
+        description="Collection for fully enriched leads (deprecated)",
         alias="MONGODB_COLLECTION_NAME"
     )
-    mongodb_raw_collection_name: str = Field(
+    mongodb_raw_collection_name: Optional[str] = Field(
         default="raw_jobs",
-        description="Collection for raw scraped job postings",
+        description="Collection for raw scraped job postings (deprecated)",
         alias="MONGODB_RAW_COLLECTION_NAME"
     )
 

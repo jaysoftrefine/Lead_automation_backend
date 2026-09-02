@@ -129,13 +129,13 @@ document.addEventListener("DOMContentLoaded", () => {
       if (!res.ok) throw new Error("Failed to fetch stats");
       const data = await res.json();
 
-      // Update Mongo Status Pill
+      // Update SQLite Status Pill
       if (data.db_connected) {
         mongoStatusPill.className = "status-pill online";
-        mongoStatusPill.innerHTML = `<span class="status-dot"></span><span class="status-text">MongoDB: Connected (${data.database_name})</span>`;
+        mongoStatusPill.innerHTML = `<span class="status-dot"></span><span class="status-text">SQLite: Connected (${data.database_name})</span>`;
       } else {
         mongoStatusPill.className = "status-pill offline";
-        mongoStatusPill.innerHTML = `<span class="status-dot"></span><span class="status-text">MongoDB: Disconnected</span>`;
+        mongoStatusPill.innerHTML = `<span class="status-dot"></span><span class="status-text">SQLite: Disconnected</span>`;
       }
 
       // Update LLM & Tavily Pills
@@ -158,7 +158,7 @@ document.addEventListener("DOMContentLoaded", () => {
     } catch (err) {
       console.error("Error fetching stats:", err);
       mongoStatusPill.className = "status-pill offline";
-      mongoStatusPill.innerHTML = `<span class="status-dot"></span><span class="status-text">MongoDB: Offline</span>`;
+      mongoStatusPill.innerHTML = `<span class="status-dot"></span><span class="status-text">SQLite: Offline</span>`;
     }
   }
 
@@ -763,7 +763,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const btnClearDbUi = document.getElementById("btn-clear-db-ui");
   if (btnClearDbUi) {
     btnClearDbUi.addEventListener("click", async () => {
-      if (!confirm("Are you sure you want to clear all leads from MongoDB? This will allow you to re-scrape from scratch.")) return;
+      if (!confirm("Are you sure you want to clear all leads from SQLite? This will allow you to re-scrape from scratch.")) return;
       try {
         const res = await fetch(`${API_BASE}/api/database/clear`, { method: "POST" });
         const data = await res.json();

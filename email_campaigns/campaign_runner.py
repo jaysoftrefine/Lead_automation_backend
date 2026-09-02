@@ -1,5 +1,5 @@
 """
-Campaign Runner — fetches recipients from SQLite + MongoDB, renders templates,
+Campaign Runner — fetches recipients from centralized SQLite (EU Startups & Job Leads), renders templates,
 and dispatches bulk emails in a background thread with per-recipient logging.
 """
 
@@ -64,42 +64,19 @@ def _get_recipients_from_sqlite(filters: Dict[str, Any]) -> List[Dict[str, Any]]
 
 def _get_recipients_from_mongo(filters: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
-    Fetch LinkedIn-scraped leads from MongoDB as campaign recipients.
+    Fetch LinkedIn-scraped leads from centralized SQLite database as campaign recipients.
+    (Preserved with original name and alias for backward compatibility).
     """
     try:
-        from db.mongo import mongo_manager
-        mongo_manager.connect()
-        collection = mongo_manager.leads_collection
-
-        query: Dict[str, Any] = {}
-        country = (filters.get("country") or "").strip()
-        if country:
-            query["location"] = {"$regex": country, "$options": "i"}
-
-        leads = list(collection.find(query, {
-            "company": 1, "contacts": 1, "company_domain": 1,
-            "location": 1, "company_size": 1
-        }))
-
-        recipients = []
-        for lead in leads:
-            for c in lead.get("contacts", []):
-                email = (c.get("email") or "").strip()
-                if not email:
-                    continue
-                recipients.append({
-                    "person_name":   c.get("name") or "",
-                    "role":          c.get("role") or "",
-                    "email":         email,
-                    "company_name":  lead.get("company") or "",
-                    "website":       f"https://{lead.get('company_domain')}" if lead.get("company_domain") else "",
-                    "city":          "",
-                    "country":       lead.get("location") or "",
-                    "category":      "",
-                })
-        return recipients
-    except Exception:
+        from db.sqlite import sqlite_manager
+        sqlite_manager.connect()
+        return sqlite_manager.get_recipients(filters)
+    except Exception as e:
+        logger.warning(f"Error getting recipients from SQLite job leads: {e}")
         return []
+
+
+_get_recipients_from_job_leads = _get_recipients_from_mongo
 
 
 def _get_manual_recipients(manual_emails: List[str]) -> List[Dict[str, Any]]:
@@ -317,7 +294,7 @@ def collect_recipients(
                 if limit and len(recipients) >= limit:
                     return recipients
 
-    if "mongo" in audience_sources:
+    if "mongo" in audience_sources or "job_leads" in audience_sources:
         for r in _get_recipients_from_mongo(audience_filters):
             e = (r.get("email") or "").lower().strip()
             if e and e not in seen_emails:
@@ -387,7 +364,7 @@ def count_recipients(
                 seen_emails.add(e)
                 count += 1
 
-    if "mongo" in audience_sources:
+    if "mongo" in audience_sources or "job_leads" in audience_sources:
         for r in _get_recipients_from_mongo(audience_filters):
             e = (r.get("email") or "").lower().strip()
             if e and e not in seen_emails:

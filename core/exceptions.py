@@ -17,7 +17,7 @@ class LLMException(LeadGenException):
 
 
 class DatabaseException(LeadGenException):
-    """Raised when MongoDB connection, query, or upsert operations fail."""
+    """Raised when database connection, query, or upsert operations fail."""
     pass
 
 

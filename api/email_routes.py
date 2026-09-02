@@ -888,7 +888,7 @@ def browse_recipients(
     page: int = 1,
     per_page: int = 25,
 ) -> Dict[str, Any]:
-    """Browse, search, and paginate available contacts from SQLite and MongoDB for audience selection (ImHUB style)."""
+    """Browse, search, and paginate available contacts from centralized SQLite (EU Startups & Job Leads) for audience selection (ImHUB style)."""
     src_list = [s.strip().lower() for s in sources.split(",") if s.strip()]
     filters: Dict[str, Any] = {}
     if country.strip():
@@ -917,14 +917,14 @@ def browse_recipients(
                     "source": "sqlite",
                 })
 
-    if "mongo" in src_list:
+    if "mongo" in src_list or "job_leads" in src_list:
         try:
             for r in _get_recipients_from_mongo(filters):
                 e = (r.get("email") or "").lower().strip()
                 if e and e not in seen:
                     seen.add(e)
                     all_recipients.append({
-                        "id": f"mongo-{e}",
+                        "id": f"leads-{e}",
                         "person_name": r.get("person_name") or "Contact",
                         "role": r.get("role") or "Professional",
                         "email": r.get("email") or "",
@@ -932,8 +932,8 @@ def browse_recipients(
                         "website": r.get("website") or "",
                         "city": r.get("city") or "",
                         "country": r.get("country") or "",
-                        "category": r.get("category") or "",
-                        "source": "mongo",
+                        "category": r.get("category") or "Job Lead",
+                        "source": "mongo" if "mongo" in src_list else "job_leads",
                     })
         except Exception:
             pass

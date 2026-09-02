@@ -8,7 +8,7 @@ from rich.panel import Panel
 
 from config.settings import settings
 from core.logging import logger
-from db.mongo import mongo_manager
+from db.sqlite import sqlite_manager
 from db.models import RawJobPosting
 from enrichment.agent import LeadEnrichmentAgent
 from pipeline.orchestrator import LeadGenOrchestrator
@@ -19,7 +19,7 @@ console = Console()
 
 @click.group()
 def cli():
-    """Lead Generation CLI: Automated Scraping, LLM Web Research & Mongo Storage."""
+    """Lead Generation CLI: Automated Scraping, LLM Web Research & SQLite Storage."""
     pass
 
 
@@ -35,7 +35,7 @@ def cli():
 @click.option("--min-score", default=30, type=int, help="Minimum lead relevance score (0-100)")
 @click.option("--hours-old", default=72, type=int, help="Scrape jobs posted within last N hours")
 def run_pipeline(search: str, location: str, sites: str, company_size: str, job_type: str, limit: int, provider: str, model: str, min_score: int, hours_old: int):
-    """Run the complete scraping -> research agent -> MongoDB pipeline."""
+    """Run the complete scraping -> research agent -> SQLite pipeline."""
     target_sites = [s.strip() for s in sites.split(",") if s.strip()]
     
     console.print(Panel.fit(
@@ -88,38 +88,38 @@ def run_pipeline(search: str, location: str, sites: str, company_size: str, job_
 
 @cli.command("test-db")
 def test_db():
-    """Test MongoDB connection and display database status."""
+    """Test SQLite connection and display database status."""
     try:
-        mongo_manager.connect()
-        leads_count = mongo_manager.leads_collection.count_documents({})
-        raw_count = mongo_manager.raw_jobs_collection.count_documents({})
+        sqlite_manager.connect()
+        stats = sqlite_manager.get_stats()
         
         console.print(Panel.fit(
-            f"[bold green]MongoDB Connection: OK[/bold green]\n"
-            f"[cyan]Database:[/cyan] {settings.mongodb_db_name}\n"
-            f"[cyan]Enriched Leads Count:[/cyan] {leads_count}\n"
-            f"[cyan]Raw Jobs Count:[/cyan] {raw_count}",
-            title="MongoDB Status"
+            f"[bold green]SQLite Database: OK[/bold green]\n"
+            f"[cyan]Database File:[/cyan] {sqlite_manager.db_path}\n"
+            f"[cyan]Enriched Leads Count:[/cyan] {stats.get('leads_count', 0)}\n"
+            f"[cyan]Raw Jobs Count:[/cyan] {stats.get('raw_jobs_count', 0)}\n"
+            f"[cyan]Total Contacts Discovered:[/cyan] {stats.get('total_contacts_discovered', 0)}\n"
+            f"[cyan]Avg Relevance Score:[/cyan] {stats.get('avg_relevance_score', 0.0)}/100",
+            title="SQLite Status"
         ))
     except Exception as e:
-        console.print(f"[bold red]MongoDB Connection Failed:[/bold red] {e}")
+        console.print(f"[bold red]SQLite Connection Failed:[/bold red] {e}")
 
 
 @cli.command("clear-db")
 @click.option("--force", "-f", is_flag=True, help="Skip confirmation prompt")
-@click.option("--drop", is_flag=True, help="Drop the entire database instead of deleting documents")
-def clear_db_command(force: bool, drop: bool):
-    """Clear all enriched leads and raw jobs from MongoDB."""
+def clear_db_command(force: bool):
+    """Clear all enriched leads and raw jobs from SQLite."""
     try:
-        mongo_manager.connect()
-        if drop:
-            mongo_manager.client.drop_database(settings.mongodb_db_name)
-            console.print(f"[bold red]Database '{settings.mongodb_db_name}' dropped completely.[/bold red]")
-            return
+        sqlite_manager.connect()
+        if not force:
+            from rich.prompt import Confirm
+            if not Confirm.ask(f"[bold red]Are you sure you want to clear all leads in {sqlite_manager.db_path}?[/bold red]"):
+                console.print("[yellow]Cancelled.[/yellow]")
+                return
 
-        deleted_leads = mongo_manager.leads_collection.delete_many({}).deleted_count
-        deleted_raw = mongo_manager.raw_jobs_collection.delete_many({}).deleted_count
-        console.print(f"[bold green]Successfully cleared database:[/bold green] Deleted {deleted_leads} leads and {deleted_raw} raw jobs.")
+        result = sqlite_manager.clear_database()
+        console.print(f"[bold green]Successfully cleared database:[/bold green] Deleted {result['leads_deleted']} leads and {result['raw_jobs_deleted']} raw jobs.")
     except Exception as e:
         console.print(f"[bold red]Error clearing database:[/bold red] {e}")
 
@@ -131,51 +131,23 @@ def clear_db_command(force: bool, drop: bool):
 @click.option("--job-type", "-t", default=None, help="Filter by job type ('contract', 'fulltime', 'parttime')")
 @click.option("--hours-old", "-h", default=None, type=int, help="Filter leads found within last N hours (e.g. 24, 72, 168, 720)")
 def list_leads(limit: int, min_score: int, company_size: str, job_type: str, hours_old: int):
-    """List enriched leads saved in MongoDB."""
+    """List enriched leads saved in SQLite."""
     try:
-        from datetime import datetime, timedelta
-        mongo_manager.connect()
-        query = {"relevance_score": {"$gte": min_score}}
-        
-        if hours_old and hours_old > 0:
-            time_cutoff = datetime.utcnow() - timedelta(hours=hours_old)
-            query["created_at"] = {"$gte": time_cutoff}
-
-        if company_size and company_size.lower() != "all":
-            if company_size.lower() == "small":
-                query["$and"] = [
-                    {
-                        "$or": [
-                            {"company_size": {"$regex": r"\b(1-10|11-50|1-50|1-20|startup|seed|micro|boutique)\b", "$options": "i"}},
-                            {"company_size": None},
-                            {"company_size": "Unspecified"},
-                        ]
-                    },
-                    {
-                        "company_size": {"$not": {"$regex": r"\b(51-200|201-500|501-1000|500\+|1000\+|enterprise)\b", "$options": "i"}}
-                    }
-                ]
-            elif company_size.lower() == "medium":
-                query["company_size"] = {"$regex": r"\b(51-200|201-500|501-1000|201-1000|200-500|medium|mid)\b", "$options": "i"}
-            elif company_size.lower() == "large":
-                query["company_size"] = {"$regex": r"\b(500\+|1000\+|5000\+|10000\+|enterprise|corporation|corporate|fortune)\b", "$options": "i"}
-
-        if job_type and job_type.lower() != "all":
-            if job_type.lower() in ("contract", "freelance"):
-                query["$or"] = [
-                    {"job_type": {"$regex": "contract|freelance|c2c|corp|gig|part-time|outside ir35", "$options": "i"}},
-                    {"title": {"$regex": "contract|freelance|c2c|gig|outside ir35", "$options": "i"}}
-                ]
-            else:
-                query["job_type"] = {"$regex": job_type, "$options": "i"}
-
-        leads = mongo_manager.get_leads(filter_query=query, limit=limit)
+        sqlite_manager.connect()
+        res = sqlite_manager.get_leads(
+            company_size=company_size,
+            job_type=job_type,
+            hours_old=hours_old,
+            min_score=min_score,
+            limit=limit,
+        )
+        leads = res.get("leads", [])
 
         if not leads:
             console.print("[yellow]No leads found matching criteria.[/yellow]")
             return
 
-        table = Table(title=f"Enriched Leads in MongoDB (Top {len(leads)})", border_style="blue")
+        table = Table(title=f"Enriched Leads in SQLite (Top {len(leads)})", border_style="blue")
         table.add_column("Company", style="bold white")
         table.add_column("Size", style="magenta")
         table.add_column("Type", style="yellow")
@@ -203,7 +175,7 @@ def list_leads(limit: int, min_score: int, company_size: str, job_type: str, hou
         console.print(table)
 
     except Exception as e:
-        console.print(f"[bold red]Error querying MongoDB:[/bold red] {e}")
+        console.print(f"[bold red]Error querying SQLite:[/bold red] {e}")
 
 
 @cli.command("test-enrichment")

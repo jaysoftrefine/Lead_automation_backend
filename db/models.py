@@ -45,7 +45,7 @@ class RawJobPosting(BaseModel):
 
 
 class EnrichedLead(BaseModel):
-    """Enriched lead stored in MongoDB after agent thinking and Tavily search."""
+    """Enriched lead stored in SQLite after agent thinking and Tavily search."""
     # Reference to original job
     job_url: str = Field(..., description="Primary unique key - Direct URL to the job posting")
     title: str = Field(..., description="Job or project title")
