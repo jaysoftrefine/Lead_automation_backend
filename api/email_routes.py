@@ -648,6 +648,32 @@ def delete_campaign(campaign_id: str) -> Dict[str, Any]:
     return {"status": "success", "message": "Campaign deleted successfully."}
 
 
+def _enrich_recipient_company_info(r: Dict[str, Any], conn) -> Dict[str, Any]:
+    """Look up company details (description, tags, website) from startups table if missing."""
+    c_name = (r.get("company_name") or "").strip()
+    if not c_name:
+        return r
+    if not r.get("company_description") or not r.get("company_tags"):
+        row = conn.execute(
+            "SELECT description, tags, website, city, country, category FROM startups WHERE LOWER(TRIM(company_name)) = LOWER(TRIM(?)) LIMIT 1",
+            (c_name,)
+        ).fetchone()
+        if row:
+            if not r.get("company_description") and row["description"]:
+                r["company_description"] = row["description"]
+            if not r.get("company_tags") and row["tags"]:
+                r["company_tags"] = row["tags"]
+            if not r.get("website") and row["website"]:
+                r["website"] = row["website"]
+            if not r.get("city") and row["city"]:
+                r["city"] = row["city"]
+            if not r.get("country") and row["country"]:
+                r["country"] = row["country"]
+            if not r.get("category") and row["category"]:
+                r["category"] = row["category"]
+    return r
+
+
 @router.post("/campaigns/preview-generated")
 def preview_campaign_generated(body: CampaignPreviewGeneratedRequest) -> Dict[str, Any]:
     """Generate and preview the exact emails that will be sent to audience recipients."""
@@ -674,8 +700,6 @@ def preview_campaign_generated(body: CampaignPreviewGeneratedRequest) -> Dict[st
         conn.close()
         raise HTTPException(status_code=400, detail="Provide template_id or subject+body.")
 
-    conn.close()
-
     # Get sample recipients from targeted audience
     recipients = collect_recipients(
         audience_sources=body.audience_sources,
@@ -698,6 +722,8 @@ def preview_campaign_generated(body: CampaignPreviewGeneratedRequest) -> Dict[st
             "city": sample_ctx["city"],
             "country": sample_ctx["country"],
             "category": sample_ctx["category"],
+            "company_description": "Poetry brings AI into talent acquisition workflows, from talent intelligence to recruiter enablement.",
+            "company_tags": "HR Tech, AI, Recruiting",
             "is_sample": True,
         }]
 
@@ -706,6 +732,7 @@ def preview_campaign_generated(body: CampaignPreviewGeneratedRequest) -> Dict[st
 
     items = []
     for r in recipients:
+        r = _enrich_recipient_company_info(r, conn)
         ctx = build_context(
             person_name=r.get("person_name"),
             role=r.get("role"),
@@ -716,6 +743,9 @@ def preview_campaign_generated(body: CampaignPreviewGeneratedRequest) -> Dict[st
             category=r.get("category"),
             sender_name=sender_name,
             email=r.get("email"),
+            company_description=r.get("company_description"),
+            company_tags=r.get("company_tags"),
+            use_ai=True,
         )
         rendered_subj, rendered_body = resolve_variables(subj_template, body_template, ctx)
         rendered_html = text_to_html_email(rendered_body)
@@ -737,6 +767,8 @@ def preview_campaign_generated(body: CampaignPreviewGeneratedRequest) -> Dict[st
             "raw_body": rendered_body,
             "context": ctx,
         })
+
+    conn.close()
 
     return {
         "status": "success",
@@ -1002,6 +1034,7 @@ def generate_review_queue(body: QueueGenerateRequest) -> Dict[str, Any]:
 
     created_items = []
     for r in recipients:
+        r = _enrich_recipient_company_info(r, conn)
         item_id = str(uuid.uuid4())
         ctx = build_context(
             person_name=r.get("person_name"),
@@ -1013,6 +1046,9 @@ def generate_review_queue(body: QueueGenerateRequest) -> Dict[str, Any]:
             category=r.get("category"),
             sender_name=sender_name,
             email=r.get("email"),
+            company_description=r.get("company_description"),
+            company_tags=r.get("company_tags"),
+            use_ai=True,
         )
         rendered_subj, rendered_body = resolve_variables(tpl["subject"], tpl["body"], ctx)
         rendered_html = text_to_html_email(rendered_body)
@@ -1214,6 +1250,100 @@ def send_queue_item(item_id: str) -> Dict[str, Any]:
         conn.commit()
         conn.close()
         return {"status": "error", "message": f"Failed to send email: {err_msg}"}
+
+
+@router.post("/queue/{item_id}/regenerate-ai")
+def regenerate_queue_item_ai(item_id: str) -> Dict[str, Any]:
+    """Regenerate personalized ai_company_hook and ai_value_pitch using Gemini for a single queue item."""
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM email_queue_items WHERE id = ?", (item_id,)).fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Queue item not found.")
+
+    item = dict(row)
+    c_name = item.get("company_name") or ""
+    desc = None
+    tags = None
+    website = item.get("website")
+    category = item.get("category")
+
+    if c_name:
+        s_row = conn.execute(
+            "SELECT description, tags, website, category FROM startups WHERE LOWER(TRIM(company_name)) = LOWER(TRIM(?)) LIMIT 1",
+            (c_name.strip(),)
+        ).fetchone()
+        if s_row:
+            desc = s_row["description"]
+            tags = s_row["tags"]
+            if not website and s_row["website"]:
+                website = s_row["website"]
+            if not category and s_row["category"]:
+                category = s_row["category"]
+
+    from email_campaigns.ai_personalizer import generate_ai_hook_and_pitch
+    ai_data = generate_ai_hook_and_pitch(
+        company_name=c_name,
+        recipient_name=item.get("recipient_name"),
+        role=item.get("role"),
+        website=website,
+        description=desc,
+        tags=tags,
+        category=category,
+    )
+
+    subj_tpl = item["subject"]
+    body_tpl = item.get("raw_body") or item["body"]
+    if item.get("template_id"):
+        tpl = conn.execute("SELECT subject, body FROM email_templates WHERE id = ?", (item["template_id"],)).fetchone()
+        if tpl:
+            subj_tpl = tpl["subject"]
+            body_tpl = tpl["body"]
+
+    cfg = get_smtp_config()
+    sender_name = cfg.get("from_name", "Stephan Arnas")
+
+    ctx = build_context(
+        person_name=item.get("recipient_name"),
+        role=item.get("role"),
+        company_name=c_name,
+        website=website,
+        city=item.get("city"),
+        country=item.get("country"),
+        category=category,
+        sender_name=sender_name,
+        email=item.get("recipient_email"),
+        company_description=desc,
+        company_tags=tags,
+        ai_company_hook=ai_data["ai_company_hook"],
+        ai_value_pitch=ai_data["ai_value_pitch"],
+        use_ai=False,
+    )
+
+    new_subj, new_body = resolve_variables(subj_tpl, body_tpl, ctx)
+    new_html = text_to_html_email(new_body)
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        """
+        UPDATE email_queue_items
+        SET subject = ?, body = ?, raw_body = ?, updated_at = ?
+        WHERE id = ?
+        """,
+        (new_subj, new_html, new_body, now_iso, item_id),
+    )
+    conn.commit()
+
+    updated = conn.execute("SELECT * FROM email_queue_items WHERE id = ?", (item_id,)).fetchone()
+    conn.close()
+
+    return {
+        "status": "success",
+        "message": f"Successfully regenerated personalized AI email for {c_name or item.get('recipient_name')}.",
+        "data": dict(updated),
+        "ai_hook": ai_data["ai_company_hook"],
+        "ai_pitch": ai_data["ai_value_pitch"],
+    }
 
 
 @router.delete("/queue/{item_id}")
