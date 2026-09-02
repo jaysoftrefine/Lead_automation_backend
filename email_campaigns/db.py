@@ -83,6 +83,47 @@ def init_email_tables() -> None:
         )
     """)
 
+    # Saved Audiences / Recipient Lists
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS email_audiences (
+            id                TEXT PRIMARY KEY,
+            name              TEXT NOT NULL,
+            description       TEXT DEFAULT '',
+            sources           TEXT DEFAULT '["sqlite"]',
+            filters           TEXT DEFAULT '{}',
+            manual_recipients TEXT DEFAULT '[]',
+            contact_count     INTEGER DEFAULT 0,
+            created_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # 1-by-1 Individual Review & Send Queue Items
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS email_queue_items (
+            id              TEXT PRIMARY KEY,
+            template_id     TEXT,
+            template_name   TEXT,
+            audience_id     TEXT,
+            recipient_name  TEXT,
+            recipient_email TEXT NOT NULL,
+            company_name    TEXT,
+            role            TEXT,
+            website         TEXT,
+            city            TEXT,
+            country         TEXT,
+            category        TEXT,
+            subject         TEXT NOT NULL,
+            body            TEXT NOT NULL,
+            raw_body        TEXT,
+            status          TEXT DEFAULT 'draft',
+            error_message   TEXT,
+            sent_at         TIMESTAMP,
+            created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
     # SMTP Configuration (single-row table)
     cur.execute("""
         CREATE TABLE IF NOT EXISTS smtp_config (

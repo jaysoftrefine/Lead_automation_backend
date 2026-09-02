@@ -8,12 +8,17 @@ from email.mime.application import MIMEApplication
 from typing import Tuple, Optional
 
 from email_campaigns.db import get_smtp_config
+from email_campaigns.template_engine import text_to_html_email
 
 
 def _build_message(smtp_user: str, from_name: str, to_email: str,
                    subject: str, html_body: str,
                    attachment_path: Optional[str] = None,
                    attachment_name: Optional[str] = None) -> MIMEMultipart:
+    # Ensure HTML is properly formatted
+    formatted_html = text_to_html_email(html_body)
+    plain_text = html_body
+
     # If there's an attachment, use mixed outer with alternative inner
     if attachment_path and os.path.exists(attachment_path):
         msg = MIMEMultipart("mixed")
@@ -21,9 +26,10 @@ def _build_message(smtp_user: str, from_name: str, to_email: str,
         msg["From"] = f"{from_name} <{smtp_user}>"
         msg["To"] = to_email
 
-        # Body part
+        # Body part (plain + html)
         alt_part = MIMEMultipart("alternative")
-        alt_part.attach(MIMEText(html_body, "html", "utf-8"))
+        alt_part.attach(MIMEText(plain_text, "plain", "utf-8"))
+        alt_part.attach(MIMEText(formatted_html, "html", "utf-8"))
         msg.attach(alt_part)
 
         # Attachment part
@@ -42,7 +48,8 @@ def _build_message(smtp_user: str, from_name: str, to_email: str,
         msg["Subject"] = subject
         msg["From"] = f"{from_name} <{smtp_user}>"
         msg["To"] = to_email
-        msg.attach(MIMEText(html_body, "html", "utf-8"))
+        msg.attach(MIMEText(plain_text, "plain", "utf-8"))
+        msg.attach(MIMEText(formatted_html, "html", "utf-8"))
 
     return msg
 
