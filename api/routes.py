@@ -131,6 +131,11 @@ class UpdateLeadStatusRequest(BaseModel):
     status: str = Field(..., example="qualified")  # new, contacted, qualified, rejected, archived
 
 
+class InstantResearchRequest(BaseModel):
+    prompt: str = Field(..., example="Research fast-growing European B2B SaaS startups in AI & automation and extract their founders with direct emails.")
+    max_search_results: Optional[int] = Field(5, ge=1, le=10)
+
+
 # --- Worker Function ---
 def _execute_pipeline_task(req: RunPipelineRequest):
     sites = req.sites or req.platforms or ["linkedin", "indeed"]
@@ -534,6 +539,101 @@ def test_enrichment_direct(req: TestEnrichmentRequest):
         }
     except Exception as e:
         logger.exception("Direct test enrichment failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/instant-research")
+def run_instant_research(req: InstantResearchRequest):
+    """Execute autonomous real-time web research, Tavily search, and LLM synthesis based on a custom prompt."""
+    prompt = req.prompt.strip()
+    if not prompt:
+        raise HTTPException(status_code=400, detail="Research prompt cannot be empty.")
+
+    try:
+        # 1. Tavily Search for live information
+        from enrichment.tools.web_search import TavilySearchTool
+        tavily = TavilySearchTool()
+        search_results = tavily.search(query=prompt, max_results=req.max_search_results or 5, search_depth="advanced")
+
+        sources: List[str] = []
+        search_context_snippets: List[str] = []
+        for res in search_results:
+            url = res.get("url")
+            if url and url not in sources:
+                sources.append(url)
+            title = res.get("title", "")
+            content = res.get("content", "")
+            search_context_snippets.append(f"Title: {title}\nURL: {url}\nContent: {content}\n")
+
+        search_context = "\n---\n".join(search_context_snippets)
+
+        # 2. Invoke LLM for synthesis and structured contact extraction
+        provider = LLMProviderRegistry.get_provider()
+        chat_model = provider.get_chat_model()
+
+        system_instruction = (
+            "You are an elite B2B Intelligence and Lead Research Agent.\n"
+            "Analyze the real-time web search findings to answer the user's objective comprehensively.\n"
+            "You must return your output strictly formatted as a JSON object with this structure:\n"
+            "{\n"
+            '  "report": "A detailed, executive markdown summary of your findings, market analysis, company overviews, and strategic insights.",\n'
+            '  "extracted_leads": [\n'
+            '    {\n'
+            '      "name": "Full Name",\n'
+            '      "role": "Founder / CEO / Head of ...",\n'
+            '      "company": "Company Name",\n'
+            '      "email": "verified or deduced email (e.g. name@company.com) or empty if unknown"\n'
+            '    }\n'
+            "  ]\n"
+            "}\n"
+            "Do not wrap in anything other than valid JSON or markdown json block."
+        )
+
+        user_content = (
+            f"Research Objective:\n{prompt}\n\n"
+            f"Web Search Results Context:\n{search_context if search_context else 'No live search results returned. Use your general knowledge.'}"
+        )
+
+        from langchain_core.messages import SystemMessage, HumanMessage
+        messages = [
+            SystemMessage(content=system_instruction),
+            HumanMessage(content=user_content),
+        ]
+
+        response = chat_model.invoke(messages)
+        raw_text = response.content if hasattr(response, "content") else str(response)
+
+        # Parse JSON from response
+        cleaned_text = raw_text.strip()
+        if "```json" in cleaned_text:
+            cleaned_text = cleaned_text.split("```json", 1)[1].split("```", 1)[0].strip()
+        elif "```" in cleaned_text:
+            cleaned_text = cleaned_text.split("```", 1)[1].split("```", 1)[0].strip()
+
+        report_text = ""
+        extracted_leads: List[Dict[str, Any]] = []
+
+        try:
+            parsed = json.loads(cleaned_text)
+            if isinstance(parsed, dict):
+                report_text = parsed.get("report") or parsed.get("summary") or ""
+                extracted_leads = parsed.get("extracted_leads") or []
+        except Exception:
+            # Fallback if json parsing fails
+            report_text = raw_text
+
+        if not report_text:
+            report_text = raw_text
+
+        return {
+            "success": True,
+            "report": report_text,
+            "extracted_leads": extracted_leads,
+            "sources": sources,
+        }
+
+    except Exception as e:
+        logger.exception("Instant agent research failed")
         raise HTTPException(status_code=500, detail=str(e))
 
 
