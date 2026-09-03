@@ -15,10 +15,10 @@ class Settings(BaseSettings):
         populate_by_name=True,
     )
 
-    # SQLite Central Database Settings
+    # SQLite Central Database Settings (Job Leads & Enriched Data)
     sqlite_db_path: str = Field(
-        default="data/eu_startups.db",
-        description="Path to centralized SQLite database file",
+        default="data/leads.db",
+        description="Path to job leads SQLite database file",
         alias="SQLITE_DB_PATH"
     )
 

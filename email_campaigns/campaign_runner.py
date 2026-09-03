@@ -20,7 +20,8 @@ def _get_recipients_from_sqlite(filters: Dict[str, Any]) -> List[Dict[str, Any]]
     Fetch enriched EU Startups people with valid emails as campaign recipients.
     Applies optional country / category / has_email filters.
     """
-    conn = get_connection()
+    from eu_startups.db import get_connection as get_eu_connection
+    conn = get_eu_connection()
     cur = conn.cursor()
 
     wheres = [

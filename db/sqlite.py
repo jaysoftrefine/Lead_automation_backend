@@ -18,7 +18,7 @@ from db.models import EnrichedLead, RawJobPosting
 
 def _resolve_db_path(configured_path: Optional[str] = None) -> Path:
     """Resolve SQLite database file path relative to project root if not absolute."""
-    path_str = configured_path or getattr(settings, "sqlite_db_path", "data/eu_startups.db")
+    path_str = configured_path or getattr(settings, "sqlite_db_path", "data/leads.db")
     p = Path(path_str)
     if not p.is_absolute():
         root_dir = Path(__file__).resolve().parent.parent

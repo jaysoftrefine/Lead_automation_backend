@@ -42,15 +42,9 @@ from google import genai
 # ============================================================
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
-DATA_DB_PATH = ROOT_DIR / "data" / "eu_startups.db"
-LOCAL_DB_PATH = Path(__file__).resolve().parent / "eu_startups.db"
-
-if DATA_DB_PATH.exists():
-    DB_PATH = str(DATA_DB_PATH)
-elif LOCAL_DB_PATH.exists():
-    DB_PATH = str(LOCAL_DB_PATH)
-else:
-    DB_PATH = str(DATA_DB_PATH)
+DATA_DIR = ROOT_DIR / "data"
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+DB_PATH = str(DATA_DIR / "eu_startups.db")
 
 GEMINI_API_KEY = (
     os.environ.get("GOOGLE_API_KEY")

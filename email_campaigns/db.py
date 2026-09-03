@@ -9,7 +9,9 @@ from pathlib import Path
 from typing import Optional
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
-DB_PATH = str(ROOT_DIR / "data" / "eu_startups.db")
+DATA_DIR = ROOT_DIR / "data"
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+DB_PATH = str(DATA_DIR / "email_campaigns.db")
 
 
 def get_connection() -> sqlite3.Connection:
