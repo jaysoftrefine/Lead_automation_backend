@@ -6,6 +6,7 @@ from typing import Optional, Dict, Any, List
 from fastapi import APIRouter, Query, HTTPException
 
 from eu_startups.db import get_connection
+from schemas import ManualStartupPerson, CreateManualStartupRequest
 
 router = APIRouter(prefix="/api/eu-startups", tags=["EU Startups"])
 
@@ -388,5 +389,106 @@ def trigger_discovery(
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Discovery error: {str(e)}")
+
+
+@router.post("/manual")
+def create_manual_startup(req: CreateManualStartupRequest) -> Dict[str, Any]:
+    """Manually insert an EU Startup and key executives/people into the database."""
+    try:
+        import uuid
+        conn = get_connection()
+        cur = conn.cursor()
+
+        company_name = req.company_name.strip()
+        if not company_name:
+            raise HTTPException(status_code=400, detail="Company name is required")
+
+        eu_url = req.eu_startups_url.strip() if req.eu_startups_url and req.eu_startups_url.strip() else f"manual://{uuid.uuid4().hex[:12]}"
+
+        existing = cur.execute(
+            "SELECT id FROM startups WHERE LOWER(TRIM(company_name)) = LOWER(TRIM(?)) OR eu_startups_url = ?",
+            (company_name, eu_url)
+        ).fetchone()
+
+        if existing:
+            startup_id = existing[0]
+            cur.execute("""
+                UPDATE startups SET
+                    description = COALESCE(?, description),
+                    website = COALESCE(?, website),
+                    country = COALESCE(?, country),
+                    state = COALESCE(?, state),
+                    city = COALESCE(?, city),
+                    founded_year = COALESCE(?, founded_year),
+                    category = COALESCE(?, category),
+                    tags = COALESCE(?, tags),
+                    company_linkedin = COALESCE(?, company_linkedin),
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            """, (
+                req.description,
+                req.website,
+                req.country,
+                req.state,
+                req.city,
+                req.founded_year,
+                req.category,
+                req.tags,
+                req.company_linkedin,
+                startup_id,
+            ))
+        else:
+            cur.execute("""
+                INSERT INTO startups (
+                    company_name, description, website, eu_startups_url,
+                    country, state, city, founded_year, category, tags,
+                    company_linkedin, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            """, (
+                company_name,
+                req.description,
+                req.website,
+                eu_url,
+                req.country,
+                req.state,
+                req.city,
+                req.founded_year,
+                req.category,
+                req.tags,
+                req.company_linkedin,
+            ))
+            startup_id = cur.lastrowid
+
+        added_people = 0
+        for p in req.people or []:
+            if (p.name and p.name.strip()) or (p.email and p.email.strip()):
+                cur.execute("""
+                    INSERT OR IGNORE INTO people (
+                        startup_id, name, role, email, linkedin, source_url, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                """, (
+                    startup_id,
+                    p.name.strip() if p.name else None,
+                    p.role.strip() if p.role else "Founder",
+                    p.email.strip() if p.email else None,
+                    p.linkedin.strip() if p.linkedin else None,
+                    "manual",
+                ))
+                added_people += 1
+
+        conn.commit()
+        conn.close()
+
+        return {
+            "success": True,
+            "startup_id": startup_id,
+            "company_name": company_name,
+            "people_added": added_people,
+            "message": f"Startup '{company_name}' successfully added with {added_people} contact(s).",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to add manual startup: {str(e)}")
 
 

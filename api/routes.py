@@ -10,13 +10,21 @@ from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Query, Response
-from pydantic import BaseModel, Field
+
+from schemas import (
+    RunPipelineRequest,
+    TestEnrichmentRequest,
+    UpdateLeadStatusRequest,
+    InstantResearchRequest,
+    ManualContactInput,
+    CreateManualLeadRequest,
+)
 
 from config.settings import settings
 from core.logging import logger
 from core.company_filter import is_matching_company_size, classify_company_size, detect_job_type_filter
 from db.sqlite import sqlite_manager
-from db.models import RawJobPosting, EnrichedLead
+from db.models import RawJobPosting, EnrichedLead, ContactPerson
 from enrichment.agent import LeadEnrichmentAgent
 from pipeline.orchestrator import LeadGenOrchestrator, PipelineMetrics
 from llm.registry import LLMProviderRegistry
@@ -91,49 +99,6 @@ class PipelineState:
 
 
 pipeline_state = PipelineState()
-
-
-# --- Request & Response Models ---
-class RunPipelineRequest(BaseModel):
-    search_term: str = Field(..., example="Python Backend Developer")
-    location: str = Field("Remote", example="Remote")
-    sites: Optional[List[str]] = Field(default_factory=lambda: ["linkedin", "indeed"])
-    platforms: Optional[List[str]] = None
-    company_size: str = Field("all", example="all", description="Target company size: 'all', 'small' (1-50 employees), 'medium' (51-500), 'large' (500+)")
-    job_type: Optional[str] = Field("all", example="all", description="Target job type: 'all', 'contract' (freelance/C2C), 'fulltime', 'parttime', 'internship'")
-    limit: Optional[int] = Field(10, ge=1, le=100)
-    results_wanted: Optional[int] = None
-    provider: Optional[str] = Field(None, example="gemini")
-    llm_provider: Optional[str] = None
-    model: Optional[str] = Field(None, example="gemini-2.5-flash")
-    model_name: Optional[str] = None
-    min_score: int = Field(20, ge=0, le=100)
-    hours_old: int = Field(168, ge=0)
-    is_remote: bool = Field(True, description="Filter strictly for Remote positions within target location")
-    skip_existing: bool = Field(False, description="Skip jobs that already exist in database")
-
-
-class TestEnrichmentRequest(BaseModel):
-    title: str = Field(..., example="Senior Software Engineer")
-    company: str = Field(..., example="Stripe")
-    location: Optional[str] = Field("Remote")
-    job_description: Optional[str] = Field(None)
-    job_url: Optional[str] = Field(None)
-    target_company_size: Optional[str] = Field("small")
-    target_job_type: Optional[str] = Field("all")
-    provider: Optional[str] = Field(None)
-    model: Optional[str] = Field(None)
-    save_to_db: bool = Field(True)
-
-
-class UpdateLeadStatusRequest(BaseModel):
-    job_url: str
-    status: str = Field(..., example="qualified")  # new, contacted, qualified, rejected, archived
-
-
-class InstantResearchRequest(BaseModel):
-    prompt: str = Field(..., example="Research fast-growing European B2B SaaS startups in AI & automation and extract their founders with direct emails.")
-    max_search_results: Optional[int] = Field(5, ge=1, le=10)
 
 
 # --- Worker Function ---
@@ -439,6 +404,68 @@ def delete_lead(url: str = Query(..., description="Job URL of the lead")):
         raise
     except Exception as e:
         logger.error(f"Error deleting lead: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/leads")
+@router.post("/leads/manual")
+def create_manual_lead(req: CreateManualLeadRequest):
+    """Add a lead manually to the SQLite database."""
+    try:
+        sqlite_manager.connect()
+        import uuid
+        job_url = req.job_url.strip() if req.job_url and req.job_url.strip() else f"manual://{uuid.uuid4().hex[:12]}"
+
+        parsed_contacts = []
+        for c in req.contacts or []:
+            if (c.name and c.name.strip()) or (c.email and c.email.strip()):
+                parsed_contacts.append(ContactPerson(
+                    name=c.name.strip() if c.name else None,
+                    role=c.role.strip() if c.role else None,
+                    email=c.email.strip() if c.email else None,
+                    phone=c.phone.strip() if c.phone else None,
+                    linkedin_url=c.linkedin_url.strip() if c.linkedin_url else None,
+                    confidence_score=85,
+                    is_verified=bool(c.email and "@" in c.email),
+                    verification_status="valid" if (c.email and "@" in c.email) else "unverified"
+                ))
+
+        lead = EnrichedLead(
+            job_url=job_url,
+            title=req.title.strip(),
+            company=req.company.strip(),
+            site="manual",
+            location=req.location.strip() if req.location else "Remote",
+            job_type=req.job_type or "fulltime",
+            job_description=req.lead_summary or f"Manual entry for {req.company}",
+            is_valid_lead=True,
+            relevance_score=req.relevance_score or 80,
+            company_domain=req.company_domain.strip() if req.company_domain else None,
+            company_summary=req.lead_summary,
+            company_size=req.company_size or "Small (1-50)",
+            contacts=parsed_contacts,
+            key_technologies=[t.strip() for t in req.key_technologies if t and t.strip()] if req.key_technologies else [],
+            hiring_urgency="Normal",
+            lead_summary=req.lead_summary,
+            status="new",
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow(),
+        )
+
+        saved = sqlite_manager.upsert_enriched_lead(lead)
+        if not saved:
+            raise HTTPException(status_code=500, detail="Failed to save manual lead to database")
+
+        return {
+            "success": True,
+            "message": f"Lead for '{req.company}' successfully added to database",
+            "job_url": job_url,
+            "lead": sqlite_manager.get_lead_by_url(job_url),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating manual lead: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

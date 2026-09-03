@@ -7,7 +7,20 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query, UploadFile, File
-from pydantic import BaseModel
+
+from schemas import (
+    TemplateCreate,
+    TemplateUpdate,
+    SMTPConfigBody,
+    CampaignCreate,
+    CampaignUpdate,
+    TestEmailBody,
+    CampaignPreviewGeneratedRequest,
+    AudienceCreate,
+    AudienceUpdate,
+    QueueGenerateRequest,
+    QueueItemUpdate,
+)
 
 from email_campaigns.db import get_connection, get_smtp_config, save_smtp_config
 from email_campaigns.smtp_sender import test_smtp_connection, send_email
@@ -31,116 +44,6 @@ router = APIRouter(prefix="/api/email", tags=["Email Campaigns"])
 ROOT_DIR = Path(__file__).resolve().parent.parent
 ATTACHMENTS_DIR = ROOT_DIR / "uploads" / "attachments"
 ATTACHMENTS_DIR.mkdir(parents=True, exist_ok=True)
-
-
-# ─────────────────────────────────────────────
-# Pydantic Models
-# ─────────────────────────────────────────────
-
-class TemplateCreate(BaseModel):
-    name: str
-    subject: str
-    body: str
-    tags: Optional[str] = ""
-    attachment_path: Optional[str] = None
-    attachment_name: Optional[str] = None
-
-
-class TemplateUpdate(BaseModel):
-    name: Optional[str] = None
-    subject: Optional[str] = None
-    body: Optional[str] = None
-    tags: Optional[str] = None
-    attachment_path: Optional[str] = None
-    attachment_name: Optional[str] = None
-
-
-class SMTPConfigBody(BaseModel):
-    smtp_host: str
-    smtp_port: int = 587
-    smtp_user: str
-    smtp_pass: str
-    from_name: str = "LeadPulse AI"
-    use_ssl: bool = False
-    use_tls: bool = True
-
-
-class CampaignCreate(BaseModel):
-    name: str
-    template_id: str
-    audience_sources: List[str] = ["sqlite"]   # "sqlite", "mongo", "manual", "selected"
-    audience_filters: Dict[str, Any] = {}       # country, category
-    manual_emails: Optional[List[str]] = None
-    selected_recipients: Optional[List[Dict[str, Any]]] = None
-    delay_seconds: float = 0.8
-    draft: bool = False
-
-
-class CampaignUpdate(BaseModel):
-    name: Optional[str] = None
-    template_id: Optional[str] = None
-    audience_sources: Optional[List[str]] = None
-    audience_filters: Optional[Dict[str, Any]] = None
-    manual_emails: Optional[List[str]] = None
-    selected_recipients: Optional[List[Dict[str, Any]]] = None
-    delay_seconds: Optional[float] = None
-    status: Optional[str] = None
-
-
-class TestEmailBody(BaseModel):
-    to_email: str
-    template_id: Optional[str] = None
-    subject: Optional[str] = None
-    body: Optional[str] = None
-    attachment_path: Optional[str] = None
-    attachment_name: Optional[str] = None
-
-
-class CampaignPreviewGeneratedRequest(BaseModel):
-    template_id: Optional[str] = None
-    subject: Optional[str] = None
-    body: Optional[str] = None
-    audience_sources: List[str] = ["sqlite"]
-    audience_filters: Dict[str, Any] = {}
-    manual_emails: Optional[List[str]] = None
-    selected_recipients: Optional[List[Dict[str, Any]]] = None
-    limit: int = 10
-
-
-class AudienceCreate(BaseModel):
-    name: str
-    description: Optional[str] = ""
-    sources: List[str] = ["sqlite"]
-    filters: Dict[str, Any] = {}
-    manual_recipients: Optional[List[Any]] = None
-    selected_recipients: Optional[List[Dict[str, Any]]] = None
-
-
-class AudienceUpdate(BaseModel):
-    name: Optional[str] = None
-    description: Optional[str] = None
-    sources: Optional[List[str]] = None
-    filters: Optional[Dict[str, Any]] = None
-    manual_recipients: Optional[List[Any]] = None
-    selected_recipients: Optional[List[Dict[str, Any]]] = None
-
-
-class QueueGenerateRequest(BaseModel):
-    template_id: str
-    audience_id: Optional[str] = None
-    audience_sources: List[str] = ["sqlite"]
-    audience_filters: Dict[str, Any] = {}
-    manual_emails: Optional[List[str]] = None
-    selected_recipients: Optional[List[Dict[str, Any]]] = None
-    limit: int = 50
-
-
-class QueueItemUpdate(BaseModel):
-    subject: Optional[str] = None
-    body: Optional[str] = None
-    recipient_name: Optional[str] = None
-    recipient_email: Optional[str] = None
-    company_name: Optional[str] = None
 
 
 # ─────────────────────────────────────────────
