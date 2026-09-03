@@ -10,7 +10,7 @@ import urllib.parse
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Query, Response, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Query, Response, WebSocket, WebSocketDisconnect, Request
 
 from schemas import (
     RunPipelineRequest,
@@ -381,6 +381,41 @@ def clear_database_api():
         }
     except Exception as e:
         logger.error(f"Error clearing database: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/database/backfill")
+async def backfill_database_api(request: Request):
+    """
+    Backfill database records.
+    - If called with a JSON payload of leads/raw_jobs, it imports and upserts them into SQLite.
+    - Runs relational backfill to sync date_posted and scraped_at between raw jobs and enriched leads.
+    """
+    try:
+        sqlite_manager.connect()
+        payload = None
+        raw_body = await request.body()
+        if raw_body:
+            try:
+                payload = json.loads(raw_body.decode("utf-8"))
+            except Exception as pe:
+                logger.warning(f"Could not parse request body as JSON: {pe}")
+
+        result = sqlite_manager.import_and_backfill(payload)
+        return result
+    except Exception as e:
+        logger.error(f"Error in backfill API: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/database/export")
+def export_database_api():
+    """Export all enriched leads and raw jobs from centralized SQLite database as JSON."""
+    try:
+        sqlite_manager.connect()
+        return sqlite_manager.export_all_data()
+    except Exception as e:
+        logger.error(f"Error exporting database: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
