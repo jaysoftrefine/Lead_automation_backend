@@ -965,37 +965,32 @@ class SqliteManager:
     def verify_database_health(self) -> Dict[str, Any]:
         """
         Verify database file connectivity, run PRAGMA quick_check,
-        and verify that all expected tables exist across all modules.
+        and verify that all expected tables exist across active modular databases.
         Raises DatabaseException if verification fails.
         """
         if not self._db_path.parent.exists():
             raise DatabaseException(f"Database directory does not exist: {self._db_path.parent}")
 
+        table_counts: Dict[str, int] = {}
+        databases_info: Dict[str, Any] = {}
+
+        # 1. Integrity and schema verification for Leads database
         conn = self.get_connection()
         try:
             cur = conn.cursor()
-            # 1. Integrity check
             cur.execute("PRAGMA quick_check")
             check_res = cur.fetchone()
             if not check_res or check_res[0] != "ok":
-                raise DatabaseException(f"SQLite PRAGMA quick_check failed: {check_res[0] if check_res else 'Unknown'}")
+                raise DatabaseException(f"SQLite PRAGMA quick_check failed on leads db: {check_res[0] if check_res else 'Unknown'}")
 
-            # 2. Enumerate existing tables
             cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
             existing_tables = set(r[0] for r in cur.fetchall())
 
-            # 3. Expected table groups
             core_tables = {"enriched_leads", "raw_jobs", "job_leads"}
-            eu_tables = {"startups", "people", "contacts", "crawl_status"}
-            email_tables = {"email_templates", "email_campaigns", "email_campaign_logs", "smtp_config", "email_audiences", "email_queue_items"}
-            
-            all_expected = core_tables | eu_tables | email_tables
-            missing = all_expected - existing_tables
-            if missing:
-                raise DatabaseException(f"Database is missing critical tables: {sorted(list(missing))}")
+            missing_core = core_tables - existing_tables
+            if missing_core:
+                raise DatabaseException(f"Database is missing critical core tables: {sorted(list(missing_core))}")
 
-            # 4. Count records in tables for health report
-            table_counts: Dict[str, int] = {}
             for tbl in sorted(existing_tables):
                 try:
                     cur.execute(f"SELECT COUNT(*) FROM {tbl}")
@@ -1003,12 +998,10 @@ class SqliteManager:
                 except Exception:
                     table_counts[tbl] = -1
 
-            return {
-                "status": "healthy",
-                "db_path": str(self._db_path),
+            databases_info["leads"] = {
+                "path": str(self._db_path),
                 "integrity": "ok",
-                "table_count": len(existing_tables),
-                "tables": table_counts
+                "tables": sorted(list(existing_tables))
             }
         except Exception as e:
             if isinstance(e, DatabaseException):
@@ -1016,6 +1009,101 @@ class SqliteManager:
             raise DatabaseException(f"Database health verification failed: {e}") from e
         finally:
             conn.close()
+
+        # 2. Integrity and schema verification for EU Startups database
+        try:
+            from eu_startups.db import DB_PATH as EU_DB_PATH, get_connection as get_eu_conn
+            eu_path = Path(EU_DB_PATH)
+            if eu_path.resolve() != self._db_path.resolve() and eu_path.exists():
+                eu_conn = get_eu_conn()
+                try:
+                    eu_cur = eu_conn.cursor()
+                    eu_cur.execute("PRAGMA quick_check")
+                    eu_check = eu_cur.fetchone()
+                    if not eu_check or eu_check[0] != "ok":
+                        raise DatabaseException(f"SQLite PRAGMA quick_check failed on EU startups db: {eu_check[0] if eu_check else 'Unknown'}")
+
+                    eu_cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+                    eu_existing = set(r[0] for r in eu_cur.fetchall())
+
+                    eu_tables = {"startups", "people", "contacts", "crawl_status"}
+                    eu_missing = eu_tables - eu_existing
+                    if eu_missing:
+                        raise DatabaseException(f"EU startups database is missing critical tables: {sorted(list(eu_missing))}")
+
+                    for tbl in sorted(eu_existing):
+                        if tbl not in table_counts:
+                            try:
+                                eu_cur.execute(f"SELECT COUNT(*) FROM {tbl}")
+                                table_counts[tbl] = eu_cur.fetchone()[0]
+                            except Exception:
+                                table_counts[tbl] = -1
+
+                    databases_info["eu_startups"] = {
+                        "path": str(eu_path),
+                        "integrity": "ok",
+                        "tables": sorted(list(eu_existing))
+                    }
+                finally:
+                    eu_conn.close()
+        except ImportError:
+            pass
+        except Exception as e:
+            if isinstance(e, DatabaseException):
+                raise
+            logger.warning(f"Could not verify EU startups database health: {e}")
+
+        # 3. Integrity and schema verification for Email Campaigns database
+        try:
+            from email_campaigns.db import DB_PATH as EMAIL_DB_PATH, get_connection as get_email_conn
+            email_path = Path(EMAIL_DB_PATH)
+            if email_path.resolve() != self._db_path.resolve() and email_path.exists():
+                email_conn = get_email_conn()
+                try:
+                    email_cur = email_conn.cursor()
+                    email_cur.execute("PRAGMA quick_check")
+                    email_check = email_cur.fetchone()
+                    if not email_check or email_check[0] != "ok":
+                        raise DatabaseException(f"SQLite PRAGMA quick_check failed on email campaigns db: {email_check[0] if email_check else 'Unknown'}")
+
+                    email_cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+                    email_existing = set(r[0] for r in email_cur.fetchall())
+
+                    email_tables = {"email_templates", "email_campaigns", "email_campaign_logs", "smtp_config", "email_audiences", "email_queue_items"}
+                    email_missing = email_tables - email_existing
+                    if email_missing:
+                        raise DatabaseException(f"Email campaigns database is missing critical tables: {sorted(list(email_missing))}")
+
+                    for tbl in sorted(email_existing):
+                        if tbl not in table_counts:
+                            try:
+                                email_cur.execute(f"SELECT COUNT(*) FROM {tbl}")
+                                table_counts[tbl] = email_cur.fetchone()[0]
+                            except Exception:
+                                table_counts[tbl] = -1
+
+                    databases_info["email_campaigns"] = {
+                        "path": str(email_path),
+                        "integrity": "ok",
+                        "tables": sorted(list(email_existing))
+                    }
+                finally:
+                    email_conn.close()
+        except ImportError:
+            pass
+        except Exception as e:
+            if isinstance(e, DatabaseException):
+                raise
+            logger.warning(f"Could not verify Email campaigns database health: {e}")
+
+        return {
+            "status": "healthy",
+            "db_path": str(self._db_path),
+            "databases": databases_info,
+            "integrity": "ok",
+            "table_count": len(table_counts),
+            "tables": table_counts
+        }
 
     def _format_lead_row(self, r: sqlite3.Row) -> Dict[str, Any]:
         """Convert a SQLite Row into a dictionary compatible with EnrichedLead JSON structure."""
