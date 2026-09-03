@@ -468,6 +468,8 @@ Respond ONLY with a valid JSON object matching this schema:
                 agent_thinking_process=structured.thinking_process,
                 search_queries_used=structured.search_queries_used or final_state.get("executed_queries", []),
                 status="new",
+                date_posted=str(job.date_posted) if job.date_posted else None,
+                scraped_at=job.scraped_at if isinstance(job.scraped_at, datetime) else None,
             )
 
             logger.info(
@@ -491,4 +493,6 @@ Respond ONLY with a valid JSON object matching this schema:
                 agent_thinking_process=f"Fallback execution due to error: {str(e)}",
                 search_queries_used=[],
                 status="new",
+                date_posted=str(job.date_posted) if job.date_posted else None,
+                scraped_at=job.scraped_at if isinstance(job.scraped_at, datetime) else None,
             )

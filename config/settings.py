@@ -1,8 +1,7 @@
-"""Application configuration settings using Pydantic Settings."""
-
+import os
 from typing import Literal, Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import Field
+from pydantic import Field, AliasChoices
 
 
 class Settings(BaseSettings):
@@ -55,8 +54,8 @@ class Settings(BaseSettings):
     # Google Gemini Settings
     google_api_key: Optional[str] = Field(
         default=None,
-        description="Google API Key for Gemini",
-        alias="GOOGLE_API_KEY"
+        description="Gemini API Key",
+        validation_alias=AliasChoices("GEMINI_API_KEY", "GOOGLE_API_KEY")
     )
     gemini_model: str = Field(
         default="gemini-3.5-flash-lite",
@@ -102,3 +101,8 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+# Automatically sync GEMINI_API_KEY and GOOGLE_API_KEY in os.environ so all SDKs find it
+if settings.google_api_key:
+    os.environ["GEMINI_API_KEY"] = settings.google_api_key
+    os.environ["GOOGLE_API_KEY"] = settings.google_api_key

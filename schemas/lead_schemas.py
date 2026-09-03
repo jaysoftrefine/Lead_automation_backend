@@ -10,7 +10,7 @@ class RunPipelineRequest(BaseModel):
     location: str = Field("Remote", example="Remote")
     sites: Optional[List[str]] = Field(default_factory=lambda: ["linkedin", "indeed"])
     platforms: Optional[List[str]] = None
-    company_size: str = Field("all", example="all", description="Target company size: 'all', 'small' (1-50 employees), 'medium' (51-500), 'large' (500+)")
+    company_size: str = Field("small", example="small", description="Target company size: 'small' (1-50 employees), 'medium' (51-500), 'large' (500+), 'all'")
     job_type: Optional[str] = Field("all", example="all", description="Target job type: 'all', 'contract' (freelance/C2C), 'fulltime', 'parttime', 'internship'")
     limit: Optional[int] = Field(10, ge=1, le=100)
     results_wanted: Optional[int] = None

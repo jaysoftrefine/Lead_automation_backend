@@ -3,12 +3,12 @@
 import os
 from pathlib import Path
 import uvicorn
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, WebSocket
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.routes import router as api_router
+from api.routes import router as api_router, websocket_pipeline_status
 from api.eu_startups_routes import router as eu_startups_router
 from api.email_routes import router as email_router
 from config.settings import settings
@@ -54,6 +54,12 @@ if FRONTEND_DIST.exists():
 app.include_router(api_router)
 app.include_router(eu_startups_router)
 app.include_router(email_router)
+
+
+@app.websocket("/ws/pipeline")
+async def ws_pipeline_alias(websocket: WebSocket):
+    """Direct root alias for pipeline websocket."""
+    await websocket_pipeline_status(websocket)
 
 
 @app.on_event("startup")

@@ -168,8 +168,12 @@ class JobSpyScraper(BaseScraper):
                     continue
 
                 raw_dict = row.to_dict()
-                # Clean NaNs out of metadata
-                clean_metadata = {k: v for k, v in raw_dict.items() if v is not None and not (isinstance(v, float) and math.isnan(v))}
+                # Clean NaNs out of metadata and ensure dates/timestamps are serialized
+                clean_metadata = {
+                    k: (v.isoformat() if hasattr(v, "isoformat") else v)
+                    for k, v in raw_dict.items()
+                    if v is not None and not (isinstance(v, float) and math.isnan(v))
+                }
 
                 posting = RawJobPosting(
                     id=clean_val(row.get("id")),

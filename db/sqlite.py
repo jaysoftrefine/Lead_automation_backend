@@ -86,10 +86,19 @@ class SqliteManager:
                     agent_thinking_process  TEXT,
                     search_queries_used     TEXT DEFAULT '[]',
                     status                  TEXT DEFAULT 'new',
+                    date_posted             TEXT,
+                    scraped_at              TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     created_at              TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at              TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+
+            # Ensure date_posted and scraped_at columns exist on existing enriched_leads table
+            for col, col_type in (("date_posted", "TEXT"), ("scraped_at", "TIMESTAMP")):
+                try:
+                    cur.execute(f"ALTER TABLE enriched_leads ADD COLUMN {col} {col_type}")
+                except Exception:
+                    pass
 
             # 2. Raw Scraped Jobs Table
             cur.execute("""
@@ -147,12 +156,34 @@ class SqliteManager:
             cur.execute("CREATE INDEX IF NOT EXISTS idx_enriched_leads_score ON enriched_leads(relevance_score)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_enriched_leads_status ON enriched_leads(status)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_enriched_leads_created ON enriched_leads(created_at)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_enriched_leads_scraped ON enriched_leads(scraped_at)")
 
             cur.execute("CREATE INDEX IF NOT EXISTS idx_raw_jobs_job_url ON raw_jobs(job_url)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_raw_jobs_scraped ON raw_jobs(scraped_at)")
 
             cur.execute("CREATE INDEX IF NOT EXISTS idx_job_leads_job_url ON job_leads(job_url)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_job_leads_company ON job_leads(company)")
+
+            # Backfill date_posted and scraped_at for any enriched leads missing them
+            try:
+                cur.execute("""
+                    UPDATE enriched_leads
+                    SET 
+                        date_posted = COALESCE(
+                            date_posted, 
+                            (SELECT rj.date_posted FROM raw_jobs rj WHERE rj.job_url = enriched_leads.job_url),
+                            (SELECT jl.date_posted FROM job_leads jl WHERE jl.job_url = enriched_leads.job_url)
+                        ),
+                        scraped_at = COALESCE(
+                            scraped_at,
+                            (SELECT rj.scraped_at FROM raw_jobs rj WHERE rj.job_url = enriched_leads.job_url),
+                            (SELECT jl.created_at FROM job_leads jl WHERE jl.job_url = enriched_leads.job_url),
+                            created_at
+                        )
+                    WHERE date_posted IS NULL OR scraped_at IS NULL
+                """)
+            except Exception:
+                pass
 
             conn.commit()
         finally:
@@ -186,8 +217,9 @@ class SqliteManager:
         conn = self.get_connection()
         try:
             cur = conn.cursor()
-            raw_meta_str = json.dumps(job.raw_metadata or {})
+            raw_meta_str = json.dumps(job.raw_metadata or {}, default=str)
             scraped_at_str = job.scraped_at.isoformat() if isinstance(job.scraped_at, datetime) else str(job.scraped_at or datetime.utcnow().isoformat())
+            date_posted_str = job.date_posted.isoformat() if hasattr(job.date_posted, "isoformat") else (str(job.date_posted) if job.date_posted else None)
 
             cur.execute("""
                 INSERT INTO raw_jobs (
@@ -220,7 +252,7 @@ class SqliteManager:
                 job.salary_min,
                 job.salary_max,
                 job.salary_currency,
-                job.date_posted,
+                date_posted_str,
                 scraped_at_str,
                 raw_meta_str,
             ))
@@ -237,11 +269,14 @@ class SqliteManager:
         conn = self.get_connection()
         try:
             cur = conn.cursor()
-            contacts_json = json.dumps([c.model_dump() for c in lead.contacts])
-            tech_json = json.dumps(lead.key_technologies or [])
-            queries_json = json.dumps(lead.search_queries_used or [])
+            contacts_json = json.dumps([c.model_dump() for c in lead.contacts], default=str)
+            tech_json = json.dumps(lead.key_technologies or [], default=str)
+            queries_json = json.dumps(lead.search_queries_used or [], default=str)
             now_iso = datetime.utcnow().isoformat()
             created_at_iso = lead.created_at.isoformat() if isinstance(lead.created_at, datetime) else now_iso
+
+            date_posted_str = str(lead.date_posted) if lead.date_posted else None
+            scraped_at_str = lead.scraped_at.isoformat() if isinstance(lead.scraped_at, datetime) else (str(lead.scraped_at) if lead.scraped_at else now_iso)
 
             cur.execute("""
                 INSERT INTO enriched_leads (
@@ -249,8 +284,8 @@ class SqliteManager:
                     is_valid_lead, relevance_score, company_domain, company_summary,
                     company_size, contacts, key_technologies, hiring_urgency,
                     lead_summary, agent_thinking_process, search_queries_used,
-                    status, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    status, date_posted, scraped_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(job_url) DO UPDATE SET
                     title=excluded.title,
                     company=excluded.company,
@@ -270,6 +305,8 @@ class SqliteManager:
                     agent_thinking_process=excluded.agent_thinking_process,
                     search_queries_used=excluded.search_queries_used,
                     status=excluded.status,
+                    date_posted=COALESCE(excluded.date_posted, enriched_leads.date_posted),
+                    scraped_at=COALESCE(excluded.scraped_at, enriched_leads.scraped_at),
                     updated_at=?
             """, (
                 lead.job_url,
@@ -291,6 +328,8 @@ class SqliteManager:
                 lead.agent_thinking_process,
                 queries_json,
                 lead.status,
+                date_posted_str,
+                scraped_at_str,
                 created_at_iso,
                 now_iso,
                 now_iso,
@@ -325,23 +364,23 @@ class SqliteManager:
             params = []
 
             if min_score > 0:
-                conditions.append("relevance_score >= ?")
+                conditions.append("enriched_leads.relevance_score >= ?")
                 params.append(min_score)
 
             if site and site.lower() != "all":
-                conditions.append("LOWER(site) = ?")
+                conditions.append("LOWER(enriched_leads.site) = ?")
                 params.append(site.lower().strip())
 
             if status and status.lower() != "all":
-                conditions.append("LOWER(status) = ?")
+                conditions.append("LOWER(enriched_leads.status) = ?")
                 params.append(status.lower().strip())
 
             if has_contacts is True:
-                conditions.append("(contacts IS NOT NULL AND contacts != '[]' AND contacts != '')")
+                conditions.append("(enriched_leads.contacts IS NOT NULL AND enriched_leads.contacts != '[]' AND enriched_leads.contacts != '')")
 
             if hours_old and hours_old > 0:
                 cutoff = (datetime.utcnow() - timedelta(hours=hours_old)).isoformat()
-                conditions.append("created_at >= ?")
+                conditions.append("enriched_leads.created_at >= ?")
                 params.append(cutoff)
 
             if company_size and company_size.lower() != "all":
@@ -349,77 +388,77 @@ class SqliteManager:
                 if c_size == "small":
                     conditions.append("""(
                         (
-                            company_size LIKE '%1-10%' OR
-                            company_size LIKE '%11-50%' OR
-                            company_size LIKE '%1-50%' OR
-                            company_size LIKE '%1-20%' OR
-                            LOWER(company_size) LIKE '%startup%' OR
-                            LOWER(company_size) LIKE '%seed%' OR
-                            LOWER(company_size) LIKE '%micro%' OR
-                            LOWER(company_size) LIKE '%boutique%' OR
-                            company_size IS NULL OR
-                            company_size = '' OR
-                            company_size = 'Unspecified' OR
-                            company_size = 'Unknown'
+                            enriched_leads.company_size LIKE '%1-10%' OR
+                            enriched_leads.company_size LIKE '%11-50%' OR
+                            enriched_leads.company_size LIKE '%1-50%' OR
+                            enriched_leads.company_size LIKE '%1-20%' OR
+                            LOWER(enriched_leads.company_size) LIKE '%startup%' OR
+                            LOWER(enriched_leads.company_size) LIKE '%seed%' OR
+                            LOWER(enriched_leads.company_size) LIKE '%micro%' OR
+                            LOWER(enriched_leads.company_size) LIKE '%boutique%' OR
+                            enriched_leads.company_size IS NULL OR
+                            enriched_leads.company_size = '' OR
+                            enriched_leads.company_size = 'Unspecified' OR
+                            enriched_leads.company_size = 'Unknown'
                         ) AND NOT (
-                            company_size LIKE '%51-200%' OR
-                            company_size LIKE '%201-500%' OR
-                            company_size LIKE '%501-1000%' OR
-                            company_size LIKE '%500+%' OR
-                            company_size LIKE '%1000+%' OR
-                            LOWER(company_size) LIKE '%enterprise%'
+                            enriched_leads.company_size LIKE '%51-200%' OR
+                            enriched_leads.company_size LIKE '%201-500%' OR
+                            enriched_leads.company_size LIKE '%501-1000%' OR
+                            enriched_leads.company_size LIKE '%500+%' OR
+                            enriched_leads.company_size LIKE '%1000+%' OR
+                            LOWER(enriched_leads.company_size) LIKE '%enterprise%'
                         )
                     )""")
                 elif c_size == "medium":
                     conditions.append("""(
-                        company_size LIKE '%51-200%' OR
-                        company_size LIKE '%201-500%' OR
-                        company_size LIKE '%501-1000%' OR
-                        company_size LIKE '%201-1000%' OR
-                        company_size LIKE '%200-500%' OR
-                        LOWER(company_size) LIKE '%medium%' OR
-                        LOWER(company_size) LIKE '%mid%'
+                        enriched_leads.company_size LIKE '%51-200%' OR
+                        enriched_leads.company_size LIKE '%201-500%' OR
+                        enriched_leads.company_size LIKE '%501-1000%' OR
+                        enriched_leads.company_size LIKE '%201-1000%' OR
+                        enriched_leads.company_size LIKE '%200-500%' OR
+                        LOWER(enriched_leads.company_size) LIKE '%medium%' OR
+                        LOWER(enriched_leads.company_size) LIKE '%mid%'
                     )""")
                 elif c_size == "large":
                     conditions.append("""(
-                        company_size LIKE '%500+%' OR
-                        company_size LIKE '%1000+%' OR
-                        company_size LIKE '%5000+%' OR
-                        company_size LIKE '%10000+%' OR
-                        LOWER(company_size) LIKE '%enterprise%' OR
-                        LOWER(company_size) LIKE '%corporation%' OR
-                        LOWER(company_size) LIKE '%corporate%' OR
-                        LOWER(company_size) LIKE '%fortune%'
+                        enriched_leads.company_size LIKE '%500+%' OR
+                        enriched_leads.company_size LIKE '%1000+%' OR
+                        enriched_leads.company_size LIKE '%5000+%' OR
+                        enriched_leads.company_size LIKE '%10000+%' OR
+                        LOWER(enriched_leads.company_size) LIKE '%enterprise%' OR
+                        LOWER(enriched_leads.company_size) LIKE '%corporation%' OR
+                        LOWER(enriched_leads.company_size) LIKE '%corporate%' OR
+                        LOWER(enriched_leads.company_size) LIKE '%fortune%'
                     )""")
 
             if job_type and job_type.lower() != "all":
                 jt = job_type.lower().strip()
                 if jt in ("contract", "freelance"):
                     conditions.append("""(
-                        LOWER(COALESCE(job_type, '')) LIKE '%contract%' OR
-                        LOWER(COALESCE(job_type, '')) LIKE '%freelance%' OR
-                        LOWER(COALESCE(job_type, '')) LIKE '%c2c%' OR
-                        LOWER(COALESCE(job_type, '')) LIKE '%corp%' OR
-                        LOWER(COALESCE(job_type, '')) LIKE '%gig%' OR
-                        LOWER(COALESCE(job_type, '')) LIKE '%part-time%' OR
-                        LOWER(COALESCE(job_type, '')) LIKE '%outside ir35%' OR
-                        LOWER(title) LIKE '%contract%' OR
-                        LOWER(title) LIKE '%freelance%' OR
-                        LOWER(title) LIKE '%c2c%' OR
-                        LOWER(title) LIKE '%gig%' OR
-                        LOWER(title) LIKE '%outside ir35%'
+                        LOWER(COALESCE(enriched_leads.job_type, '')) LIKE '%contract%' OR
+                        LOWER(COALESCE(enriched_leads.job_type, '')) LIKE '%freelance%' OR
+                        LOWER(COALESCE(enriched_leads.job_type, '')) LIKE '%c2c%' OR
+                        LOWER(COALESCE(enriched_leads.job_type, '')) LIKE '%corp%' OR
+                        LOWER(COALESCE(enriched_leads.job_type, '')) LIKE '%gig%' OR
+                        LOWER(COALESCE(enriched_leads.job_type, '')) LIKE '%part-time%' OR
+                        LOWER(COALESCE(enriched_leads.job_type, '')) LIKE '%outside ir35%' OR
+                        LOWER(enriched_leads.title) LIKE '%contract%' OR
+                        LOWER(enriched_leads.title) LIKE '%freelance%' OR
+                        LOWER(enriched_leads.title) LIKE '%c2c%' OR
+                        LOWER(enriched_leads.title) LIKE '%gig%' OR
+                        LOWER(enriched_leads.title) LIKE '%outside ir35%'
                     )""")
                 else:
-                    conditions.append("LOWER(COALESCE(job_type, '')) LIKE ?")
+                    conditions.append("LOWER(COALESCE(enriched_leads.job_type, '')) LIKE ?")
                     params.append(f"%{jt}%")
 
             if search and search.strip():
                 term = f"%{search.strip().lower()}%"
                 conditions.append("""(
-                    LOWER(title) LIKE ? OR
-                    LOWER(company) LIKE ? OR
-                    LOWER(COALESCE(key_technologies, '')) LIKE ? OR
-                    LOWER(COALESCE(contacts, '')) LIKE ?
+                    LOWER(enriched_leads.title) LIKE ? OR
+                    LOWER(enriched_leads.company) LIKE ? OR
+                    LOWER(COALESCE(enriched_leads.key_technologies, '')) LIKE ? OR
+                    LOWER(COALESCE(enriched_leads.contacts, '')) LIKE ?
                 )""")
                 params.extend([term, term, term, term])
 
@@ -433,9 +472,15 @@ class SqliteManager:
             # Fetch page items
             offset = (page - 1) * limit
             data_sql = f"""
-                SELECT * FROM enriched_leads 
+                SELECT 
+                    enriched_leads.*,
+                    COALESCE(enriched_leads.date_posted, rj.date_posted, jl.date_posted) AS resolved_date_posted,
+                    COALESCE(enriched_leads.scraped_at, rj.scraped_at, jl.created_at, enriched_leads.created_at) AS resolved_scraped_at
+                FROM enriched_leads 
+                LEFT JOIN raw_jobs rj ON enriched_leads.job_url = rj.job_url
+                LEFT JOIN job_leads jl ON enriched_leads.job_url = jl.job_url
                 {where_clause}
-                ORDER BY created_at DESC 
+                ORDER BY enriched_leads.created_at DESC 
                 LIMIT ? OFFSET ?
             """
             cur.execute(data_sql, params + [limit, offset])
@@ -463,7 +508,16 @@ class SqliteManager:
         conn = self.get_connection()
         try:
             cur = conn.cursor()
-            cur.execute("SELECT * FROM enriched_leads WHERE job_url = ? LIMIT 1", (job_url,))
+            cur.execute("""
+                SELECT 
+                    enriched_leads.*,
+                    COALESCE(enriched_leads.date_posted, rj.date_posted, jl.date_posted) AS resolved_date_posted,
+                    COALESCE(enriched_leads.scraped_at, rj.scraped_at, jl.created_at, enriched_leads.created_at) AS resolved_scraped_at
+                FROM enriched_leads 
+                LEFT JOIN raw_jobs rj ON enriched_leads.job_url = rj.job_url
+                LEFT JOIN job_leads jl ON enriched_leads.job_url = jl.job_url
+                WHERE enriched_leads.job_url = ? LIMIT 1
+            """, (job_url,))
             row = cur.fetchone()
             if not row:
                 return None
@@ -737,6 +791,8 @@ class SqliteManager:
         # Boolean conversion
         doc["is_valid_lead"] = bool(doc.get("is_valid_lead", 1))
         doc["_id"] = str(doc.get("id", ""))
+        doc["date_posted"] = doc.get("date_posted")
+        doc["scraped_at"] = doc.get("scraped_at") or doc.get("created_at")
         return doc
 
 

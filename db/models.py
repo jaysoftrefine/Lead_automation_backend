@@ -1,7 +1,7 @@
 """Pydantic data models for jobs, contacts, and enriched leads."""
 
-from datetime import datetime
-from typing import List, Optional, Dict, Any
+from datetime import datetime, date
+from typing import List, Optional, Dict, Any, Union
 from pydantic import BaseModel, Field, HttpUrl
 
 
@@ -37,7 +37,7 @@ class RawJobPosting(BaseModel):
     salary_min: Optional[float] = Field(None, description="Minimum compensation if specified")
     salary_max: Optional[float] = Field(None, description="Maximum compensation if specified")
     salary_currency: Optional[str] = Field(None, description="Currency of salary")
-    date_posted: Optional[str] = Field(None, description="Date or relative time job was posted")
+    date_posted: Optional[Union[str, date, Any]] = Field(None, description="Date or relative time job was posted")
     scraped_at: datetime = Field(default_factory=datetime.utcnow, description="Timestamp of scraping")
 
     # Extra raw attributes
@@ -99,5 +99,7 @@ class EnrichedLead(BaseModel):
         default="new",
         description="Lead status: new, contacted, qualified, rejected, archived"
     )
+    date_posted: Optional[str] = Field(None, description="Date or relative time job was posted")
+    scraped_at: Optional[datetime] = Field(None, description="Timestamp of initial scrape")
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)

@@ -1,5 +1,6 @@
 """FastAPI Router for Lead Generation Engine."""
 
+import asyncio
 import csv
 import io
 import json
@@ -9,7 +10,7 @@ import urllib.parse
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Query, Response
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Query, Response, WebSocket, WebSocketDisconnect
 
 from schemas import (
     RunPipelineRequest,
@@ -32,6 +33,62 @@ from llm.registry import LLMProviderRegistry
 router = APIRouter(prefix="/api")
 
 
+# --- WebSocket Manager for Real-Time Streaming ---
+class WebSocketManager:
+    def __init__(self):
+        self.active_connections: List[WebSocket] = []
+        self.loop: Optional[asyncio.AbstractEventLoop] = None
+        self._lock = threading.RLock()
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        with self._lock:
+            self.active_connections.append(websocket)
+            try:
+                self.loop = asyncio.get_running_loop()
+            except RuntimeError:
+                pass
+
+    def disconnect(self, websocket: WebSocket):
+        with self._lock:
+            if websocket in self.active_connections:
+                self.active_connections.remove(websocket)
+
+    def broadcast(self, data: Dict[str, Any]):
+        with self._lock:
+            if not self.active_connections:
+                return
+            loop = self.loop
+            if not loop or loop.is_closed():
+                try:
+                    loop = asyncio.get_running_loop()
+                    self.loop = loop
+                except RuntimeError:
+                    return
+        try:
+            asyncio.run_coroutine_threadsafe(self._send_all(data), loop)
+        except Exception as e:
+            logger.debug(f"WebSocket broadcast error: {e}")
+
+    async def _send_all(self, data: Dict[str, Any]):
+        with self._lock:
+            conns = list(self.active_connections)
+        dead = []
+        for ws in conns:
+            try:
+                await ws.send_json(data)
+            except Exception:
+                dead.append(ws)
+        if dead:
+            with self._lock:
+                for d in dead:
+                    if d in self.active_connections:
+                        self.active_connections.remove(d)
+
+
+ws_manager = WebSocketManager()
+
+
 # --- Pipeline State Management ---
 class PipelineState:
     def __init__(self):
@@ -47,7 +104,26 @@ class PipelineState:
         self.metrics: Optional[Dict[str, Any]] = None
         self.error_message: Optional[str] = None
         self._stop_requested: bool = False
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
+
+    def to_dict(self) -> Dict[str, Any]:
+        with self._lock:
+            return {
+                "is_running": self.is_running,
+                "status": self.status,
+                "processed_count": self.processed_count,
+                "total_count": self.total_count,
+                "current_job_title": self.current_job_title,
+                "current_company": self.current_company,
+                "started_at": self.started_at,
+                "finished_at": self.finished_at,
+                "logs": list(self.logs),
+                "metrics": self.metrics,
+                "error_message": self.error_message,
+            }
+
+    def notify(self):
+        ws_manager.broadcast(self.to_dict())
 
     def add_log(self, message: str, level: str = "info"):
         timestamp = datetime.now().strftime("%H:%M:%S")
@@ -55,6 +131,7 @@ class PipelineState:
             self.logs.append({"time": timestamp, "message": message, "level": level})
             if len(self.logs) > 200:
                 self.logs.pop(0)
+        self.notify()
 
     def reset(self, total: int = 0):
         with self._lock:
@@ -70,6 +147,7 @@ class PipelineState:
             self.metrics = None
             self.error_message = None
             self._stop_requested = False
+        self.notify()
 
     def finish(self, metrics: Optional[PipelineMetrics] = None, error: Optional[str] = None):
         with self._lock:
@@ -78,10 +156,10 @@ class PipelineState:
             if error:
                 self.status = "error"
                 self.error_message = error
-                self.add_log(f"Pipeline error: {error}", level="error")
+                self.logs.append({"time": datetime.now().strftime("%H:%M:%S"), "message": f"Pipeline error: {error}", "level": "error"})
             else:
                 self.status = "completed"
-                self.add_log("Pipeline completed successfully!", level="success")
+                self.logs.append({"time": datetime.now().strftime("%H:%M:%S"), "message": "Pipeline completed successfully!", "level": "success"})
             if metrics:
                 self.metrics = {
                     "search_term": metrics.search_term,
@@ -96,6 +174,7 @@ class PipelineState:
                     "total_contacts_discovered": metrics.total_contacts_discovered,
                     "duration_seconds": metrics.duration_seconds,
                 }
+        self.notify()
 
 
 pipeline_state = PipelineState()
@@ -103,9 +182,9 @@ pipeline_state = PipelineState()
 
 # --- Worker Function ---
 def _execute_pipeline_task(req: RunPipelineRequest):
-    sites = req.sites or req.platforms or ["linkedin", "indeed"]
+    sites = req.sites or req.platforms or ["linkedin"]  # ["linkedin", "indeed"]
     target_goal = req.limit or req.results_wanted or 10
-    target_size = req.company_size or "all"
+    target_size = req.company_size or "small"
     detected_job_type, effective_search_term = detect_job_type_filter(req.search_term, explicit_job_type=req.job_type)
     
     remote_tag = " [REMOTE ONLY]" if req.is_remote else ""
@@ -496,22 +575,34 @@ def trigger_pipeline(req: RunPipelineRequest, background_tasks: BackgroundTasks)
     }
 
 
+@router.websocket("/pipeline/ws")
+async def websocket_pipeline_status(websocket: WebSocket):
+    """Real-time WebSocket endpoint streaming pipeline status, progress, and terminal logs."""
+    await ws_manager.connect(websocket)
+    try:
+        # Immediately send current state snapshot upon connection
+        await websocket.send_json(pipeline_state.to_dict())
+        while True:
+            try:
+                msg = await asyncio.wait_for(websocket.receive_text(), timeout=1.0)
+                if msg == "ping":
+                    await websocket.send_text("pong")
+                elif msg in ("status", "get_status"):
+                    await websocket.send_json(pipeline_state.to_dict())
+            except asyncio.TimeoutError:
+                # Keep-alive heartbeat and state sync while running
+                if pipeline_state.is_running:
+                    await websocket.send_json(pipeline_state.to_dict())
+    except (WebSocketDisconnect, Exception):
+        pass
+    finally:
+        ws_manager.disconnect(websocket)
+
+
 @router.get("/pipeline/status")
 def get_pipeline_status():
     """Get the current live status and logs of the pipeline."""
-    return {
-        "is_running": pipeline_state.is_running,
-        "status": pipeline_state.status,
-        "processed_count": pipeline_state.processed_count,
-        "total_count": pipeline_state.total_count,
-        "current_job_title": pipeline_state.current_job_title,
-        "current_company": pipeline_state.current_company,
-        "started_at": pipeline_state.started_at,
-        "finished_at": pipeline_state.finished_at,
-        "logs": pipeline_state.logs,
-        "metrics": pipeline_state.metrics,
-        "error_message": pipeline_state.error_message,
-    }
+    return pipeline_state.to_dict()
 
 
 @router.post("/pipeline/stop")
