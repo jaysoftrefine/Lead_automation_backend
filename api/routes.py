@@ -20,6 +20,10 @@ from schemas import (
     InstantResearchRequest,
     ManualContactInput,
     CreateManualLeadRequest,
+    CheckPresenceItem,
+    CheckPresenceRequest,
+    AddExtractedLeadRequest,
+    BatchAddExtractedLeadsRequest,
 )
 
 from config.settings import settings
@@ -606,6 +610,226 @@ def create_manual_lead(req: CreateManualLeadRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/leads/check-presence")
+def check_leads_presence(req: CheckPresenceRequest):
+    """Check which leads / contacts are already present in the SQLite database."""
+    try:
+        sqlite_manager.connect()
+        conn = sqlite_manager.get_connection()
+        cur = conn.cursor()
+        results: Dict[str, Any] = {}
+
+        for item in req.leads:
+            company = (item.company or "").strip()
+            email = (item.email or "").strip().lower()
+            name = (item.name or "").strip().lower()
+            key = email if email else f"{company.lower()}::{name}"
+
+            already_exists = False
+            matched_company = False
+            lead_id = None
+
+            if company:
+                cur.execute("SELECT id, contacts FROM enriched_leads WHERE LOWER(company) = LOWER(?)", (company,))
+                c_row = cur.fetchone()
+                if c_row:
+                    matched_company = True
+                    lead_id = c_row["id"]
+                    try:
+                        contacts_list = json.loads(c_row["contacts"] or "[]")
+                        for c in contacts_list:
+                            c_email = (c.get("email") or "").lower().strip()
+                            c_name = (c.get("name") or "").lower().strip()
+                            if (email and c_email == email) or (name and c_name == name):
+                                already_exists = True
+                                break
+                    except Exception:
+                        pass
+
+            if not already_exists and email and "@" in email:
+                cur.execute("SELECT id FROM enriched_leads WHERE LOWER(contacts) LIKE ?", (f"%{email}%",))
+                row = cur.fetchone()
+                if row:
+                    already_exists = True
+                    lead_id = row["id"]
+
+            results[key] = {
+                "already_exists": already_exists,
+                "company_exists": matched_company,
+                "lead_id": lead_id,
+            }
+
+        return {"status": "success", "results": results}
+    except Exception as e:
+        logger.error(f"Error checking presence: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/leads/add-from-agent")
+def add_lead_from_agent(req: AddExtractedLeadRequest):
+    """Add an extracted contact from Autonomous Research Agent to leads.
+    If company lead exists: appends contact to its contacts list (if not duplicate).
+    If company lead does not exist: creates a new EnrichedLead.
+    """
+    try:
+        import uuid
+        sqlite_manager.connect()
+        conn = sqlite_manager.get_connection()
+        cur = conn.cursor()
+
+        company = req.company.strip()
+        name = req.name.strip() if req.name else "Decision Maker"
+        role = req.role.strip() if req.role else "Executive"
+        email = req.email.strip() if req.email else None
+
+        # Check if company lead already exists
+        cur.execute("SELECT id, job_url, company, contacts FROM enriched_leads WHERE LOWER(company) = LOWER(?)", (company,))
+        existing_lead = cur.fetchone()
+
+        if existing_lead:
+            contacts_list = []
+            try:
+                contacts_list = json.loads(existing_lead["contacts"] or "[]")
+            except Exception:
+                contacts_list = []
+
+            is_duplicate = False
+            for c in contacts_list:
+                c_email = (c.get("email") or "").strip().lower()
+                c_name = (c.get("name") or "").strip().lower()
+                if (email and c_email == email.lower()) or (name.lower() == c_name):
+                    is_duplicate = True
+                    break
+
+            if is_duplicate:
+                return {
+                    "success": True,
+                    "already_existed": True,
+                    "message": f"'{name}' is already attached to lead '{company}'.",
+                    "lead_id": existing_lead["id"],
+                }
+
+            new_contact = {
+                "name": name,
+                "role": role,
+                "email": email,
+                "phone": None,
+                "linkedin_url": req.linkedin_url or None,
+                "confidence_score": 85,
+                "source_url": "instant_agent_lab",
+                "is_verified": bool(email and "@" in email),
+                "verification_status": "valid" if (email and "@" in email) else "unverified",
+                "verification_details": "Extracted by Autonomous Research Agent",
+            }
+            contacts_list.append(new_contact)
+            cur.execute(
+                "UPDATE enriched_leads SET contacts = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (json.dumps(contacts_list), existing_lead["id"]),
+            )
+            conn.commit()
+
+            return {
+                "success": True,
+                "action": "contact_appended",
+                "message": f"Added '{name}' ({role}) to existing lead '{company}'!",
+                "lead_id": existing_lead["id"],
+            }
+        else:
+            job_url = f"agent://{uuid.uuid4().hex[:12]}"
+            domain = None
+            if email and "@" in email:
+                dom = email.split("@")[-1].lower()
+                if not any(dom.endswith(pub) for pub in ["gmail.com", "yahoo.com", "hotmail.com", "outlook.com", "icloud.com"]):
+                    domain = dom
+
+            parsed_contact = ContactPerson(
+                name=name,
+                role=role,
+                email=email,
+                phone=None,
+                linkedin_url=req.linkedin_url or None,
+                confidence_score=85,
+                source_url="instant_agent_lab",
+                is_verified=bool(email and "@" in email),
+                verification_status="valid" if (email and "@" in email) else "unverified",
+                verification_details="Extracted by Autonomous Research Agent",
+            )
+
+            prompt_desc = (
+                f"Discovered via Autonomous Research Agent. Objective: {req.research_prompt}"
+                if req.research_prompt
+                else f"Discovered via Autonomous Research Agent for {company}."
+            )
+
+            lead = EnrichedLead(
+                job_url=job_url,
+                title=f"{role} at {company}",
+                company=company,
+                site="instant_agent",
+                location=req.location or "Europe / Global",
+                job_type="fulltime",
+                job_description=prompt_desc,
+                is_valid_lead=True,
+                relevance_score=85,
+                company_domain=domain,
+                company_summary=f"{company} - identified during agent intelligence research.",
+                company_size="Small (1-50)",
+                lead_type=req.lead_type or "company",
+                contacts=[parsed_contact],
+                key_technologies=[],
+                hiring_urgency="Normal",
+                lead_summary=f"Extracted contact {name} ({role}) from {company}.",
+                status="new",
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow(),
+            )
+
+            saved = sqlite_manager.upsert_enriched_lead(lead)
+            if not saved:
+                raise HTTPException(status_code=500, detail="Failed to save lead to database")
+
+            return {
+                "success": True,
+                "action": "lead_created",
+                "message": f"Successfully created new lead for '{company}' ({name})!",
+                "job_url": job_url,
+            }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error adding lead from agent: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/leads/add-batch-from-agent")
+def add_batch_leads_from_agent(req: BatchAddExtractedLeadsRequest):
+    """Batch add multiple extracted contacts from Autonomous Research Agent."""
+    added_count = 0
+    skipped_count = 0
+    errors = []
+
+    for item in req.leads:
+        try:
+            if not item.research_prompt and req.research_prompt:
+                item.research_prompt = req.research_prompt
+            res = add_lead_from_agent(item)
+            if res.get("already_existed"):
+                skipped_count += 1
+            else:
+                added_count += 1
+        except Exception as e:
+            errors.append(f"{item.company}: {str(e)}")
+
+    return {
+        "success": True,
+        "added_count": added_count,
+        "skipped_count": skipped_count,
+        "errors": errors,
+        "message": f"Successfully added {added_count} lead(s) to database! ({skipped_count} already present)",
+    }
+
+
 @router.post("/pipeline/run")
 @router.post("/pipeline/start")
 def trigger_pipeline(req: RunPipelineRequest, background_tasks: BackgroundTasks):
@@ -800,6 +1024,45 @@ def run_instant_research(req: InstantResearchRequest):
 
         if not report_text:
             report_text = raw_text
+
+        # Annotate extracted leads with already_exists status
+        try:
+            sqlite_manager.connect()
+            conn = sqlite_manager.get_connection()
+            cur = conn.cursor()
+            for lead in extracted_leads:
+                email = (lead.get("email") or "").strip().lower()
+                company = (lead.get("company") or "").strip()
+                name = (lead.get("name") or "").strip().lower()
+
+                already_exists = False
+                matched_company = False
+
+                if company:
+                    cur.execute("SELECT id, contacts FROM enriched_leads WHERE LOWER(company) = LOWER(?)", (company,))
+                    c_row = cur.fetchone()
+                    if c_row:
+                        matched_company = True
+                        try:
+                            contacts_list = json.loads(c_row["contacts"] or "[]")
+                            for c in contacts_list:
+                                c_email = (c.get("email") or "").lower().strip()
+                                c_name = (c.get("name") or "").lower().strip()
+                                if (email and c_email == email) or (name and c_name == name):
+                                    already_exists = True
+                                    break
+                        except Exception:
+                            pass
+
+                if not already_exists and email and "@" in email:
+                    cur.execute("SELECT id FROM enriched_leads WHERE LOWER(contacts) LIKE ?", (f"%{email}%",))
+                    if cur.fetchone():
+                        already_exists = True
+
+                lead["already_exists"] = already_exists
+                lead["company_exists"] = matched_company
+        except Exception as err:
+            logger.warning(f"Error checking presence of extracted leads: {err}")
 
         return {
             "success": True,

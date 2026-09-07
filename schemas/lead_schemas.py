@@ -79,3 +79,31 @@ class CreateManualLeadRequest(BaseModel):
     relevance_score: Optional[int] = 80
     lead_type: Optional[str] = "company"
     contacts: Optional[List[ManualContactInput]] = Field(default_factory=list)
+
+
+class CheckPresenceItem(BaseModel):
+    name: Optional[str] = None
+    role: Optional[str] = None
+    company: str
+    email: Optional[str] = None
+
+
+class CheckPresenceRequest(BaseModel):
+    leads: List[CheckPresenceItem]
+
+
+class AddExtractedLeadRequest(BaseModel):
+    name: Optional[str] = None
+    role: Optional[str] = None
+    company: str
+    email: Optional[str] = None
+    location: Optional[str] = None
+    linkedin_url: Optional[str] = None
+    lead_type: Optional[str] = "company"
+    research_prompt: Optional[str] = None
+
+
+class BatchAddExtractedLeadsRequest(BaseModel):
+    leads: List[AddExtractedLeadRequest]
+    research_prompt: Optional[str] = None
+

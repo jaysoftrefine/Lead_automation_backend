@@ -12,6 +12,10 @@ from schemas.lead_schemas import (
     InstantResearchRequest,
     ManualContactInput,
     CreateManualLeadRequest,
+    CheckPresenceItem,
+    CheckPresenceRequest,
+    AddExtractedLeadRequest,
+    BatchAddExtractedLeadsRequest,
 )
 from schemas.email_schemas import (
     TemplateCreate,
