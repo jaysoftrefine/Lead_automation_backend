@@ -922,6 +922,7 @@ class SqliteManager:
         conn = self.get_connection()
         filters = filters or {}
         country_filter = (filters.get("country") or "").strip().lower()
+        lead_type_filter = (filters.get("lead_type") or "").strip().lower()
         recipients = []
         seen_emails = set()
 
@@ -929,13 +930,17 @@ class SqliteManager:
             cur = conn.cursor()
             # 1. From enriched_leads
             cur.execute("""
-                SELECT company, company_domain, location, contacts 
+                SELECT company, company_domain, location, contacts, COALESCE(lead_type, 'others') as lead_type 
                 FROM enriched_leads 
                 WHERE contacts IS NOT NULL AND contacts != '[]'
             """)
             for row in cur.fetchall():
                 loc = row["location"] or ""
                 if country_filter and country_filter not in loc.lower():
+                    continue
+
+                row_lt = (row["lead_type"] or "others").strip("'\" ").lower()
+                if lead_type_filter and lead_type_filter != "all" and row_lt != lead_type_filter:
                     continue
 
                 try:
@@ -958,36 +963,39 @@ class SqliteManager:
                             "country":      loc,
                             "category":     "Job Lead",
                             "source":       "job_leads",
+                            "lead_type":    row_lt,
                         })
 
             # 2. From job_leads (historical / legacy scraped data)
-            cur.execute("""
-                SELECT company, company_website, location, emails, phones, recruiter_name, title
-                FROM job_leads
-                WHERE emails IS NOT NULL AND emails != '' AND emails != 'None'
-            """)
-            for row in cur.fetchall():
-                loc = row["location"] or ""
-                if country_filter and country_filter not in loc.lower():
-                    continue
+            if not lead_type_filter or lead_type_filter in ("all", "others"):
+                cur.execute("""
+                    SELECT company, company_website, location, emails, phones, recruiter_name, title
+                    FROM job_leads
+                    WHERE emails IS NOT NULL AND emails != '' AND emails != 'None'
+                """)
+                for row in cur.fetchall():
+                    loc = row["location"] or ""
+                    if country_filter and country_filter not in loc.lower():
+                        continue
 
-                raw_emails = row["emails"] or ""
-                for em in re.split(r"[,;\s]+", raw_emails):
-                    email = em.strip()
-                    if email and "@" in email and email.lower() not in seen_emails:
-                        seen_emails.add(email.lower())
-                        site = row["company_website"] or ""
-                        recipients.append({
-                            "person_name":  row["recruiter_name"] or "Hiring Manager",
-                            "role":         f"Recruiter / Hiring for {row['title']}" if row['title'] else "Hiring Manager",
-                            "email":        email,
-                            "company_name": row["company"] or "",
-                            "website":      site if site.startswith("http") else (f"https://{site}" if site else ""),
-                            "city":         "",
-                            "country":      loc,
-                            "category":     "Job Lead",
-                            "source":       "job_leads",
-                        })
+                    raw_emails = row["emails"] or ""
+                    for em in re.split(r"[,;\s]+", raw_emails):
+                        email = em.strip()
+                        if email and "@" in email and email.lower() not in seen_emails:
+                            seen_emails.add(email.lower())
+                            site = row["company_website"] or ""
+                            recipients.append({
+                                "person_name":  row["recruiter_name"] or "Hiring Manager",
+                                "role":         f"Recruiter / Hiring for {row['title']}" if row['title'] else "Hiring Manager",
+                                "email":        email,
+                                "company_name": row["company"] or "",
+                                "website":      site if site.startswith("http") else (f"https://{site}" if site else ""),
+                                "city":         "",
+                                "country":      loc,
+                                "category":     "Job Lead",
+                                "source":       "job_leads",
+                                "lead_type":    "others",
+                            })
 
             return recipients
         except Exception as e:

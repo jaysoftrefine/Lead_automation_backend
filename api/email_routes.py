@@ -788,6 +788,7 @@ def browse_recipients(
     country: str = "",
     category: str = "",
     search: str = "",
+    lead_type: str = "",
     page: int = 1,
     per_page: int = 25,
 ) -> Dict[str, Any]:
@@ -798,6 +799,8 @@ def browse_recipients(
         filters["country"] = country.strip()
     if category.strip():
         filters["category"] = category.strip()
+    if lead_type.strip() and lead_type.strip().lower() != "all":
+        filters["lead_type"] = lead_type.strip().lower()
 
     all_recipients: List[Dict[str, Any]] = []
     seen = set()
@@ -818,6 +821,7 @@ def browse_recipients(
                     "country": r.get("country") or "",
                     "category": r.get("category") or "",
                     "source": "sqlite",
+                    "lead_type": "company",
                 })
 
     if "mongo" in src_list or "job_leads" in src_list:
@@ -837,6 +841,7 @@ def browse_recipients(
                         "country": r.get("country") or "",
                         "category": r.get("category") or "Job Lead",
                         "source": "mongo" if "mongo" in src_list else "job_leads",
+                        "lead_type": r.get("lead_type") or "others",
                     })
         except Exception:
             pass
