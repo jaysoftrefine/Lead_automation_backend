@@ -140,7 +140,7 @@ def text_to_html_email(text: str) -> str:
     """Convert a plain text or markdown email body into styled HTML compatible with email clients and preview."""
     if not text:
         return ""
-    if any(tag in text.lower() for tag in ["<html", "<body", "<table", "<div", "<p "]):
+    if any(tag in text.lower() for tag in ["<html", "<body", "<table", "<div", "<p ", "<p>", "<br", "<ul", "<ol", "<li"]):
         return text
 
     blocks = re.split(r"\n\s*\n", text.strip())
