@@ -686,6 +686,10 @@ def add_lead_from_agent(req: AddExtractedLeadRequest):
         cur.execute("SELECT id, job_url, company, contacts FROM enriched_leads WHERE LOWER(company) = LOWER(?)", (company,))
         existing_lead = cur.fetchone()
 
+        contact_linkedin = req.linkedin_url
+        if not contact_linkedin and name and company:
+            contact_linkedin = f"https://www.linkedin.com/search/results/people/?keywords={urllib.parse.quote(f'{name} {company}')}"
+
         if existing_lead:
             contacts_list = []
             try:
@@ -714,7 +718,7 @@ def add_lead_from_agent(req: AddExtractedLeadRequest):
                 "role": role,
                 "email": email,
                 "phone": None,
-                "linkedin_url": req.linkedin_url or None,
+                "linkedin_url": contact_linkedin,
                 "confidence_score": 85,
                 "source_url": "instant_agent_lab",
                 "is_verified": bool(email and "@" in email),
@@ -747,7 +751,7 @@ def add_lead_from_agent(req: AddExtractedLeadRequest):
                 role=role,
                 email=email,
                 phone=None,
-                linkedin_url=req.linkedin_url or None,
+                linkedin_url=contact_linkedin,
                 confidence_score=85,
                 source_url="instant_agent_lab",
                 is_verified=bool(email and "@" in email),
