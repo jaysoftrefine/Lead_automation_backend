@@ -86,6 +86,7 @@ class SqliteManager:
                     agent_thinking_process  TEXT,
                     search_queries_used     TEXT DEFAULT '[]',
                     status                  TEXT DEFAULT 'new',
+                    lead_type               TEXT DEFAULT 'others',
                     date_posted             TEXT,
                     scraped_at              TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     created_at              TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -93,8 +94,8 @@ class SqliteManager:
                 )
             """)
 
-            # Ensure date_posted and scraped_at columns exist on existing enriched_leads table
-            for col, col_type in (("date_posted", "TEXT"), ("scraped_at", "TIMESTAMP")):
+            # Ensure date_posted, scraped_at, and lead_type columns exist on existing enriched_leads table
+            for col, col_type in (("date_posted", "TEXT"), ("scraped_at", "TIMESTAMP"), ("lead_type", "TEXT DEFAULT 'others'")):
                 try:
                     cur.execute(f"ALTER TABLE enriched_leads ADD COLUMN {col} {col_type}")
                 except Exception:
@@ -284,8 +285,8 @@ class SqliteManager:
                     is_valid_lead, relevance_score, company_domain, company_summary,
                     company_size, contacts, key_technologies, hiring_urgency,
                     lead_summary, agent_thinking_process, search_queries_used,
-                    status, date_posted, scraped_at, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    status, lead_type, date_posted, scraped_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(job_url) DO UPDATE SET
                     title=excluded.title,
                     company=excluded.company,
@@ -305,6 +306,7 @@ class SqliteManager:
                     agent_thinking_process=excluded.agent_thinking_process,
                     search_queries_used=excluded.search_queries_used,
                     status=excluded.status,
+                    lead_type=excluded.lead_type,
                     date_posted=COALESCE(excluded.date_posted, enriched_leads.date_posted),
                     scraped_at=COALESCE(excluded.scraped_at, enriched_leads.scraped_at),
                     updated_at=?
@@ -328,6 +330,7 @@ class SqliteManager:
                 lead.agent_thinking_process,
                 queries_json,
                 lead.status,
+                lead.lead_type or "others",
                 date_posted_str,
                 scraped_at_str,
                 created_at_iso,
@@ -348,6 +351,7 @@ class SqliteManager:
         search: Optional[str] = None,
         site: Optional[str] = None,
         status: Optional[str] = None,
+        lead_type: Optional[str] = None,
         company_size: Optional[str] = None,
         job_type: Optional[str] = None,
         hours_old: Optional[int] = None,
@@ -374,6 +378,10 @@ class SqliteManager:
             if status and status.lower() != "all":
                 conditions.append("LOWER(enriched_leads.status) = ?")
                 params.append(status.lower().strip())
+
+            if lead_type and lead_type.lower() != "all":
+                conditions.append("COALESCE(LOWER(enriched_leads.lead_type), 'others') = ?")
+                params.append(lead_type.lower().strip())
 
             if has_contacts is True:
                 conditions.append("(enriched_leads.contacts IS NOT NULL AND enriched_leads.contacts != '[]' AND enriched_leads.contacts != '')")
@@ -490,12 +498,31 @@ class SqliteManager:
             for r in rows:
                 leads.append(self._format_lead_row(r))
 
+            # Compute breakdown counts for company, personal, others and total
+            type_counts = {"all": 0, "company": 0, "personal": 0, "others": 0}
+            try:
+                cur.execute("""
+                    SELECT COALESCE(LOWER(lead_type), 'others') as lt, COUNT(*) 
+                    FROM enriched_leads 
+                    GROUP BY COALESCE(LOWER(lead_type), 'others')
+                """)
+                for crow in cur.fetchall():
+                    ctype = (crow[0] or "others").lower()
+                    if ctype in type_counts:
+                        type_counts[ctype] = crow[1]
+                cur.execute("SELECT COUNT(*) FROM enriched_leads")
+                all_count_row = cur.fetchone()
+                type_counts["all"] = all_count_row[0] if all_count_row else 0
+            except Exception as te:
+                logger.warning(f"Could not calculate lead type counts: {te}")
+
             return {
                 "total": total,
                 "page": page,
                 "limit": limit,
                 "total_pages": (total + limit - 1) // limit if limit else 1,
                 "leads": leads,
+                "type_counts": type_counts,
             }
         except Exception as e:
             logger.error(f"Error fetching leads from SQLite: {e}")
@@ -536,6 +563,22 @@ class SqliteManager:
                 SET status = ?, updated_at = ? 
                 WHERE job_url = ?
             """, (status, now_iso, job_url))
+            conn.commit()
+            return cur.rowcount > 0
+        finally:
+            conn.close()
+
+    def update_lead_type(self, job_url: str, lead_type: str) -> bool:
+        """Update lead type classification (company, personal, others) in SQLite."""
+        conn = self.get_connection()
+        try:
+            cur = conn.cursor()
+            now_iso = datetime.utcnow().isoformat()
+            cur.execute("""
+                UPDATE enriched_leads 
+                SET lead_type = ?, updated_at = ? 
+                WHERE job_url = ?
+            """, (lead_type, now_iso, job_url))
             conn.commit()
             return cur.rowcount > 0
         finally:

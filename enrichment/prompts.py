@@ -52,6 +52,12 @@ You must explicitly record your reasoning steps in `thinking_process`:
    - Evaluate `hiring_urgency` (Immediate, High, Normal, Low).
    - Synthesize a `lead_summary` outlining the tailored pitch and recommended outreach angle directly to the Founder / CEO / CTO / Director.
 
+7. **Lead Type Classification**:
+   - Classify into `lead_type`:
+     - `"company"`: Posted by a company/organization seeking to hire a dev agency, outsource a project, or build a team. Clear corporate B2B intent.
+     - `"personal"`: Posted by an individual, solo founder, or small team seeking a single freelancer or contractor for their personal/small project.
+     - `"others"`: Cannot confidently determine from the JD and available context. Use when signals are ambiguous or missing.
+
 ### STRICT OPERATING RULES:
 - Focus on Founders, Co-Founders, CEO, CTO, COO, Directors, Owners, and Product Managers (PMs).
 - Never fabricate fake phone numbers or fake personal emails. If direct email cannot be confirmed, provide standard corporate email pattern with matching name or official domain.

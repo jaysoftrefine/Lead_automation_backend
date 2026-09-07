@@ -95,6 +95,10 @@ class EnrichedLead(BaseModel):
     )
     
     # Status & Timestamps
+    lead_type: Optional[str] = Field(
+        default="others",
+        description="Lead classification: 'company' (org looking to outsource), 'personal' (individual seeking freelancer), 'others' (unclear)"
+    )
     status: str = Field(
         default="new",
         description="Lead status: new, contacted, qualified, rejected, archived"

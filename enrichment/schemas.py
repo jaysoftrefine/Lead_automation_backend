@@ -54,3 +54,12 @@ class ExtractedLeadData(BaseModel):
         default_factory=list,
         description="List of search queries that were executed during the investigation"
     )
+    lead_type: str = Field(
+        default="others",
+        description=(
+            "Classify the lead into one of three categories: "
+            "'company' — posted by a company/organization seeking to hire a dev agency, outsource a project, or build a team (clear corporate B2B signals); "
+            "'personal' — posted by an individual, solo founder, or small team seeking a freelancer or single contractor for their personal/small project; "
+            "'others' — cannot confidently determine from the JD whether it is company or personal, or context is missing/unclear."
+        )
+    )

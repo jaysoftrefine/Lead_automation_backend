@@ -16,6 +16,7 @@ from schemas import (
     RunPipelineRequest,
     TestEnrichmentRequest,
     UpdateLeadStatusRequest,
+    UpdateLeadTypeRequest,
     InstantResearchRequest,
     ManualContactInput,
     CreateManualLeadRequest,
@@ -445,6 +446,7 @@ def get_leads(
     search: Optional[str] = Query(None, description="Search term for title or company"),
     site: Optional[str] = Query(None, description="Platform filter (linkedin, naukri, etc.)"),
     status: Optional[str] = Query(None, description="Lead status filter"),
+    lead_type: Optional[str] = Query(None, description="Lead type filter ('company', 'personal', 'others', 'all')"),
     company_size: Optional[str] = Query(None, description="Company size filter ('small', 'medium', 'large', 'all')"),
     job_type: Optional[str] = Query(None, description="Job type filter ('contract', 'fulltime', 'parttime', 'all')"),
     hours_old: Optional[int] = Query(None, description="Filter leads found within last N hours (e.g. 24, 72, 168, 720)"),
@@ -460,6 +462,7 @@ def get_leads(
             search=search,
             site=site,
             status=status,
+            lead_type=lead_type,
             company_size=company_size,
             job_type=job_type,
             hours_old=hours_old,
@@ -502,6 +505,25 @@ def update_lead_status(req: UpdateLeadStatusRequest):
         raise
     except Exception as e:
         logger.error(f"Error updating lead status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/leads/update-lead-type")
+def update_lead_type(req: UpdateLeadTypeRequest):
+    """Update lead type classification (company, personal, others)."""
+    valid_types = {"company", "personal", "others"}
+    if req.lead_type not in valid_types:
+        raise HTTPException(status_code=400, detail=f"Invalid lead_type. Must be one of: {valid_types}")
+    try:
+        sqlite_manager.connect()
+        updated = sqlite_manager.update_lead_type(req.job_url, req.lead_type)
+        if not updated:
+            raise HTTPException(status_code=404, detail="Lead not found")
+        return {"success": True, "lead_type": req.lead_type}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating lead type: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -557,6 +579,7 @@ def create_manual_lead(req: CreateManualLeadRequest):
             company_domain=req.company_domain.strip() if req.company_domain else None,
             company_summary=req.lead_summary,
             company_size=req.company_size or "Small (1-50)",
+            lead_type=req.lead_type or "others",
             contacts=parsed_contacts,
             key_technologies=[t.strip() for t in req.key_technologies if t and t.strip()] if req.key_technologies else [],
             hiring_urgency="Normal",

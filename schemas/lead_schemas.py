@@ -44,6 +44,12 @@ class UpdateLeadStatusRequest(BaseModel):
     status: str = Field(..., example="qualified")  # new, contacted, qualified, rejected, archived
 
 
+class UpdateLeadTypeRequest(BaseModel):
+    """Payload to update lead type classification."""
+    job_url: str
+    lead_type: str = Field(..., example="company")  # company, personal, others
+
+
 class InstantResearchRequest(BaseModel):
     """Payload for on-the-fly deep web research of companies and executives."""
     prompt: str = Field(..., example="Research fast-growing European B2B SaaS startups in AI & automation and extract their founders with direct emails.")
@@ -71,4 +77,5 @@ class CreateManualLeadRequest(BaseModel):
     lead_summary: Optional[str] = None
     key_technologies: Optional[List[str]] = Field(default_factory=list)
     relevance_score: Optional[int] = 80
+    lead_type: Optional[str] = "company"
     contacts: Optional[List[ManualContactInput]] = Field(default_factory=list)
