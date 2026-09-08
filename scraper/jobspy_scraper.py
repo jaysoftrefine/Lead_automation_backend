@@ -68,6 +68,7 @@ class JobSpyScraper(BaseScraper):
         job_type: Optional[str] = None,
         is_remote: bool = True,
         country_indeed: Optional[str] = None,
+        offset: int = 0,
         **kwargs
     ) -> List[RawJobPosting]:
         """
@@ -96,6 +97,7 @@ class JobSpyScraper(BaseScraper):
                 "is_remote": is_remote,
                 "country_indeed": resolved_country,
                 "proxies": self.proxies,
+                "offset": offset,
                 **kwargs
             }
             if job_type and job_type.lower() not in ("all", "any"):

@@ -16,6 +16,7 @@ class BaseScraper(ABC):
         results_wanted: int = 20,
         hours_old: Optional[int] = None,
         sites: Optional[List[str]] = None,
+        offset: int = 0,
         **kwargs
     ) -> List[RawJobPosting]:
         """

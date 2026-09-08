@@ -9,8 +9,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.routes import router as api_router, websocket_pipeline_status
-from api.eu_startups_routes import router as eu_startups_router
-from api.email_routes import router as email_router
+from api.eu_startups import router as eu_startups_router
+from api.email import router as email_router
 from config.settings import settings
 from core.logging import logger
 from db.sqlite import sqlite_manager
