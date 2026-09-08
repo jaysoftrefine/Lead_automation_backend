@@ -30,15 +30,42 @@ class SMTPConfigBody(BaseModel):
     smtp_port: int = 587
     smtp_user: str
     smtp_pass: str
-    from_name: str = "LeadPulse AI"
+    from_name: str = "HirePilot AI"
     use_ssl: bool = False
     use_tls: bool = True
+
+
+class SMTPAccountCreate(BaseModel):
+    """Payload to add a new SMTP credential account."""
+    name: Optional[str] = None
+    smtp_host: str
+    smtp_port: int = 587
+    smtp_user: str
+    smtp_pass: str
+    from_name: str = "HirePilot AI"
+    use_ssl: bool = False
+    use_tls: bool = True
+    is_default: bool = False
+
+
+class SMTPAccountUpdate(BaseModel):
+    """Payload to update an existing SMTP credential account."""
+    name: Optional[str] = None
+    smtp_host: Optional[str] = None
+    smtp_port: Optional[int] = None
+    smtp_user: Optional[str] = None
+    smtp_pass: Optional[str] = None
+    from_name: Optional[str] = None
+    use_ssl: Optional[bool] = None
+    use_tls: Optional[bool] = None
+    is_default: Optional[bool] = None
 
 
 class CampaignCreate(BaseModel):
     """Payload to create a new outreach campaign."""
     name: str
     template_id: str
+    smtp_account_id: Optional[str] = None
     audience_sources: List[str] = ["sqlite"]   # "sqlite", "mongo", "manual", "selected"
     audience_filters: Dict[str, Any] = {}       # country, category
     manual_emails: Optional[List[str]] = None
@@ -51,6 +78,7 @@ class CampaignUpdate(BaseModel):
     """Payload to update an existing campaign configuration or state."""
     name: Optional[str] = None
     template_id: Optional[str] = None
+    smtp_account_id: Optional[str] = None
     audience_sources: Optional[List[str]] = None
     audience_filters: Optional[Dict[str, Any]] = None
     manual_emails: Optional[List[str]] = None
@@ -62,6 +90,7 @@ class CampaignUpdate(BaseModel):
 class TestEmailBody(BaseModel):
     """Payload to send a test verification email."""
     to_email: str
+    smtp_account_id: Optional[str] = None
     template_id: Optional[str] = None
     subject: Optional[str] = None
     body: Optional[str] = None
@@ -104,6 +133,7 @@ class AudienceUpdate(BaseModel):
 class QueueGenerateRequest(BaseModel):
     """Payload to generate an outbound email dispatch queue."""
     template_id: str
+    smtp_account_id: Optional[str] = None
     audience_id: Optional[str] = None
     audience_sources: List[str] = ["sqlite"]
     audience_filters: Dict[str, Any] = {}
@@ -116,6 +146,12 @@ class QueueItemUpdate(BaseModel):
     """Payload to update an individual email item in the send queue."""
     subject: Optional[str] = None
     body: Optional[str] = None
+    smtp_account_id: Optional[str] = None
     recipient_name: Optional[str] = None
     recipient_email: Optional[str] = None
     company_name: Optional[str] = None
+
+
+class QueueSendRequest(BaseModel):
+    """Payload to send an individual queue item with an explicit SMTP account."""
+    smtp_account_id: Optional[str] = None

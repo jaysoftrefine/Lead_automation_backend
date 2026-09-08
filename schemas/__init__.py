@@ -21,6 +21,8 @@ from schemas.email_schemas import (
     TemplateCreate,
     TemplateUpdate,
     SMTPConfigBody,
+    SMTPAccountCreate,
+    SMTPAccountUpdate,
     CampaignCreate,
     CampaignUpdate,
     TestEmailBody,
@@ -29,6 +31,7 @@ from schemas.email_schemas import (
     AudienceUpdate,
     QueueGenerateRequest,
     QueueItemUpdate,
+    QueueSendRequest,
 )
 
 __all__ = [
@@ -47,6 +50,8 @@ __all__ = [
     "TemplateCreate",
     "TemplateUpdate",
     "SMTPConfigBody",
+    "SMTPAccountCreate",
+    "SMTPAccountUpdate",
     "CampaignCreate",
     "CampaignUpdate",
     "TestEmailBody",
@@ -55,4 +60,5 @@ __all__ = [
     "AudienceUpdate",
     "QueueGenerateRequest",
     "QueueItemUpdate",
+    "QueueSendRequest",
 ]

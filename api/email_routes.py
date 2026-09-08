@@ -12,6 +12,8 @@ from schemas import (
     TemplateCreate,
     TemplateUpdate,
     SMTPConfigBody,
+    SMTPAccountCreate,
+    SMTPAccountUpdate,
     CampaignCreate,
     CampaignUpdate,
     TestEmailBody,
@@ -20,9 +22,20 @@ from schemas import (
     AudienceUpdate,
     QueueGenerateRequest,
     QueueItemUpdate,
+    QueueSendRequest,
 )
 
-from email_campaigns.db import get_connection, get_smtp_config, save_smtp_config
+from email_campaigns.db import (
+    get_connection,
+    get_smtp_config,
+    save_smtp_config,
+    list_smtp_accounts,
+    get_smtp_account,
+    create_smtp_account,
+    update_smtp_account,
+    delete_smtp_account,
+    set_default_smtp_account,
+)
 from email_campaigns.smtp_sender import test_smtp_connection, send_email
 from email_campaigns.template_engine import (
     get_sample_context,
@@ -100,12 +113,104 @@ def list_attachments() -> Dict[str, Any]:
 
 
 # ─────────────────────────────────────────────
-# SMTP Config Endpoints
+# SMTP Config & Multi-Account Endpoints
 # ─────────────────────────────────────────────
+
+@router.get("/smtp/accounts")
+def get_smtp_accounts() -> Dict[str, Any]:
+    """Return list of all configured outgoing SMTP accounts with passwords masked."""
+    accounts = list_smtp_accounts()
+    for acc in accounts:
+        acc["smtp_pass"] = "••••••••" if acc.get("smtp_pass") else ""
+        acc["use_ssl"] = bool(acc.get("use_ssl"))
+        acc["use_tls"] = bool(acc.get("use_tls"))
+        acc["is_default"] = bool(acc.get("is_default"))
+    return {"status": "success", "data": accounts}
+
+
+@router.post("/smtp/accounts")
+def add_smtp_account(body: SMTPAccountCreate) -> Dict[str, Any]:
+    """Add a new SMTP account to the database."""
+    created = create_smtp_account(body.model_dump())
+    created["smtp_pass"] = "••••••••" if created.get("smtp_pass") else ""
+    created["use_ssl"] = bool(created.get("use_ssl"))
+    created["use_tls"] = bool(created.get("use_tls"))
+    created["is_default"] = bool(created.get("is_default"))
+    return {
+        "status": "success",
+        "message": f"SMTP account '{created.get('name')}' added successfully.",
+        "data": created,
+    }
+
+
+@router.get("/smtp/accounts/{account_id}")
+def get_single_smtp_account(account_id: str) -> Dict[str, Any]:
+    """Retrieve details for a single SMTP account (password masked)."""
+    acc = get_smtp_account(account_id)
+    if not acc:
+        raise HTTPException(status_code=404, detail="SMTP account not found.")
+    acc["smtp_pass"] = "••••••••" if acc.get("smtp_pass") else ""
+    acc["use_ssl"] = bool(acc.get("use_ssl"))
+    acc["use_tls"] = bool(acc.get("use_tls"))
+    acc["is_default"] = bool(acc.get("is_default"))
+    return {"status": "success", "data": acc}
+
+
+@router.put("/smtp/accounts/{account_id}")
+def update_single_smtp_account(account_id: str, body: SMTPAccountUpdate) -> Dict[str, Any]:
+    """Update an existing SMTP account. If password omitted or masked, existing password remains."""
+    dump = body.model_dump(exclude_unset=True)
+    updated = update_smtp_account(account_id, dump)
+    if not updated:
+        raise HTTPException(status_code=404, detail="SMTP account not found.")
+    updated["smtp_pass"] = "••••••••" if updated.get("smtp_pass") else ""
+    updated["use_ssl"] = bool(updated.get("use_ssl"))
+    updated["use_tls"] = bool(updated.get("use_tls"))
+    updated["is_default"] = bool(updated.get("is_default"))
+    return {
+        "status": "success",
+        "message": f"SMTP account '{updated.get('name')}' updated successfully.",
+        "data": updated,
+    }
+
+
+@router.delete("/smtp/accounts/{account_id}")
+def delete_single_smtp_account(account_id: str) -> Dict[str, Any]:
+    """Delete an SMTP account. If default, automatically selects another account."""
+    ok = delete_smtp_account(account_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="SMTP account not found.")
+    return {"status": "success", "message": "SMTP account removed."}
+
+
+@router.post("/smtp/accounts/{account_id}/default")
+def set_default_smtp_account_endpoint(account_id: str) -> Dict[str, Any]:
+    """Set an SMTP account as the primary default account."""
+    ok = set_default_smtp_account(account_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="SMTP account not found.")
+    return {"status": "success", "message": "Account set as primary default SMTP."}
+
+
+@router.post("/smtp/accounts/{account_id}/test")
+def test_specific_smtp_account(account_id: str) -> Dict[str, Any]:
+    """Test connection using a saved account's credentials."""
+    cfg = get_smtp_config(account_id)
+    if not cfg or not cfg.get("smtp_host") or not cfg.get("smtp_user"):
+        raise HTTPException(status_code=404, detail="SMTP account not found or incomplete.")
+    ok, msg = test_smtp_connection(cfg)
+    return {
+        "status": "success" if ok else "failed",
+        "message": msg,
+        "connected": ok,
+        "account_id": account_id,
+        "smtp_user": cfg.get("smtp_user"),
+    }
+
 
 @router.get("/smtp/config")
 def get_smtp() -> Dict[str, Any]:
-    """Return current SMTP configuration (password masked)."""
+    """Return default SMTP configuration (password masked) for backward compatibility."""
     cfg = get_smtp_config()
     cfg["smtp_pass"] = "••••••••" if cfg.get("smtp_pass") else ""
     return {"status": "success", "data": cfg}
@@ -113,7 +218,7 @@ def get_smtp() -> Dict[str, Any]:
 
 @router.post("/smtp/config")
 def save_smtp(body: SMTPConfigBody) -> Dict[str, Any]:
-    """Save SMTP configuration to the database."""
+    """Save default SMTP configuration to the database."""
     save_smtp_config(
         host=body.smtp_host,
         port=body.smtp_port,
@@ -127,14 +232,20 @@ def save_smtp(body: SMTPConfigBody) -> Dict[str, Any]:
 
 
 @router.post("/smtp/test")
-def test_smtp(body: Optional[SMTPConfigBody] = None) -> Dict[str, Any]:
-    """Test SMTP connection with provided or saved credentials."""
-    if body:
-        cfg = body.model_dump()
-        cfg["smtp_host"] = cfg.pop("smtp_host")
-        cfg["smtp_port"] = cfg.pop("smtp_port")
-        cfg["smtp_user"] = cfg.pop("smtp_user")
-        cfg["smtp_pass"] = cfg.pop("smtp_pass")
+def test_smtp(body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Test SMTP connection with provided credentials or by account_id or default."""
+    if body and body.get("account_id"):
+        cfg = get_smtp_config(body["account_id"])
+    elif body and body.get("smtp_host"):
+        cfg = {
+            "smtp_host": body.get("smtp_host", ""),
+            "smtp_port": int(body.get("smtp_port") or 587),
+            "smtp_user": body.get("smtp_user", ""),
+            "smtp_pass": body.get("smtp_pass", ""),
+            "from_name": body.get("from_name", "HirePilot AI"),
+            "use_ssl": bool(body.get("use_ssl", False)),
+            "use_tls": bool(body.get("use_tls", True)),
+        }
     else:
         cfg = get_smtp_config()
     ok, msg = test_smtp_connection(cfg)
@@ -291,7 +402,7 @@ def preview_raw(body: Dict[str, Any]) -> Dict[str, Any]:
 @router.post("/send-test")
 def send_test_email(body: TestEmailBody) -> Dict[str, Any]:
     """Send a single test email to verify SMTP and template rendering with optional PDF attachment."""
-    cfg = get_smtp_config()
+    cfg = get_smtp_config(body.smtp_account_id)
     ctx = get_sample_context(sender_name=cfg.get("from_name", "Your Name"))
 
     attachment_path = body.attachment_path
@@ -321,7 +432,7 @@ def send_test_email(body: TestEmailBody) -> Dict[str, Any]:
         return {"status": "failed", "message": f"Failed to send: {err}"}
     return {
         "status": "success",
-        "message": f"Test email sent to {body.to_email}{' with attachment' if attachment_path else ''} ✓"
+        "message": f"Test email sent to {body.to_email} (from {cfg.get('smtp_user')}){' with attachment' if attachment_path else ''} ✓"
     }
 
 
@@ -331,7 +442,7 @@ def send_test_email(body: TestEmailBody) -> Dict[str, Any]:
 
 @router.get("/campaigns")
 def list_campaigns() -> Dict[str, Any]:
-    """List all past email campaigns."""
+    """List all email campaigns ordered by newest first."""
     conn = get_connection()
     rows = conn.execute(
         "SELECT * FROM email_campaigns ORDER BY created_at DESC"
@@ -342,7 +453,11 @@ def list_campaigns() -> Dict[str, Any]:
 
 @router.post("/campaigns")
 def create_campaign(body: CampaignCreate) -> Dict[str, Any]:
-    """Create a campaign as draft or immediately launch it."""
+    """
+    Create a new email campaign.
+    If body.draft=True, saves with status='draft' without sending.
+    If body.draft=False, validates SMTP and immediately launches the campaign in a background thread.
+    """
     conn = get_connection()
     tpl = conn.execute(
         "SELECT * FROM email_templates WHERE id = ?", (body.template_id,)
@@ -368,13 +483,14 @@ def create_campaign(body: CampaignCreate) -> Dict[str, Any]:
         # Save as draft without launching
         conn.execute("""
             INSERT INTO email_campaigns
-                (id, name, template_id, template_name, subject, attachment_path, attachment_name, status, audience_filter)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?)
+                (id, name, template_id, template_name, subject, attachment_path, attachment_name, status, audience_filter, smtp_account_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)
         """, (
             cid, body.name.strip(), body.template_id,
             tpl["name"], tpl["subject"],
             attachment_path, attachment_name,
             json.dumps(config_payload),
+            body.smtp_account_id,
         ))
         conn.commit()
         row = conn.execute("SELECT * FROM email_campaigns WHERE id = ?", (cid,)).fetchone()
@@ -386,23 +502,25 @@ def create_campaign(body: CampaignCreate) -> Dict[str, Any]:
         }
 
     # Validate SMTP before launching
-    smtp_ok, smtp_msg = test_smtp_connection()
+    smtp_cfg = get_smtp_config(body.smtp_account_id)
+    smtp_ok, smtp_msg = test_smtp_connection(smtp_cfg)
     if not smtp_ok:
         conn.close()
         raise HTTPException(
             status_code=400,
-            detail=f"SMTP not configured or invalid: {smtp_msg}. Please configure SMTP first.",
+            detail=f"SMTP not configured or invalid ({smtp_cfg.get('smtp_user') or 'default'}): {smtp_msg}. Please check SMTP credentials.",
         )
 
     conn.execute("""
         INSERT INTO email_campaigns
-            (id, name, template_id, template_name, subject, attachment_path, attachment_name, status, audience_filter)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?)
+            (id, name, template_id, template_name, subject, attachment_path, attachment_name, status, audience_filter, smtp_account_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)
     """, (
         cid, body.name.strip(), body.template_id,
         tpl["name"], tpl["subject"],
         attachment_path, attachment_name,
         json.dumps(config_payload),
+        body.smtp_account_id,
     ))
     conn.commit()
     conn.close()
@@ -419,11 +537,12 @@ def create_campaign(body: CampaignCreate) -> Dict[str, Any]:
         delay_seconds=body.delay_seconds,
         attachment_path=attachment_path,
         attachment_name=attachment_name,
+        smtp_account_id=body.smtp_account_id,
     )
 
     return {
         "status": "success",
-        "message": f"Campaign launched! Sending to {total} recipient(s){' with PDF attachment' if attachment_path else ''}.",
+        "message": f"Campaign launched via {smtp_cfg.get('smtp_user')}! Sending to {total} recipient(s){' with PDF attachment' if attachment_path else ''}.",
         "data": {"campaign_id": cid, "total_recipients": total},
     }
 
@@ -453,6 +572,9 @@ def update_campaign(campaign_id: str, body: CampaignUpdate) -> Dict[str, Any]:
 
     if body.status is not None:
         updates["status"] = body.status
+
+    if body.smtp_account_id is not None:
+        updates["smtp_account_id"] = body.smtp_account_id
 
     # Merge audience filter configuration
     existing_filter = {}
@@ -507,12 +629,15 @@ def launch_campaign_by_id(campaign_id: str) -> Dict[str, Any]:
         conn.close()
         raise HTTPException(status_code=404, detail="Associated email template not found.")
 
-    smtp_ok, smtp_msg = test_smtp_connection()
+    camp_dict = dict(camp)
+    smtp_account_id = camp_dict.get("smtp_account_id")
+    smtp_cfg = get_smtp_config(smtp_account_id)
+    smtp_ok, smtp_msg = test_smtp_connection(smtp_cfg)
     if not smtp_ok:
         conn.close()
         raise HTTPException(
             status_code=400,
-            detail=f"SMTP not configured or invalid: {smtp_msg}. Please configure SMTP first.",
+            detail=f"SMTP not configured or invalid ({smtp_cfg.get('smtp_user') or 'default'}): {smtp_msg}. Please configure SMTP first.",
         )
 
     # Parse config
@@ -550,6 +675,7 @@ def launch_campaign_by_id(campaign_id: str) -> Dict[str, Any]:
         delay_seconds=delay_seconds,
         attachment_path=attachment_path,
         attachment_name=attachment_name,
+        smtp_account_id=smtp_account_id,
     )
 
     return {
@@ -1062,8 +1188,8 @@ def generate_review_queue(body: QueueGenerateRequest) -> Dict[str, Any]:
         conn.close()
         raise HTTPException(status_code=400, detail="No recipients found for this audience. Check filters or manual contacts.")
 
-    cfg = get_smtp_config()
-    sender_name = cfg.get("from_name", "Stephan Arnas")
+    cfg = get_smtp_config(body.smtp_account_id)
+    sender_name = cfg.get("from_name", "HirePilot AI")
 
     created_items = []
     for r in recipients:
@@ -1091,8 +1217,8 @@ def generate_review_queue(body: QueueGenerateRequest) -> Dict[str, Any]:
             INSERT INTO email_queue_items (
                 id, template_id, template_name, audience_id,
                 recipient_name, recipient_email, company_name, role, website, city, country, category,
-                subject, body, raw_body, status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft')
+                subject, body, raw_body, status, smtp_account_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?)
             """,
             (
                 item_id,
@@ -1110,6 +1236,7 @@ def generate_review_queue(body: QueueGenerateRequest) -> Dict[str, Any]:
                 rendered_subj,
                 rendered_html,
                 rendered_body,
+                body.smtp_account_id,
             ),
         )
         created_items.append({
@@ -1119,6 +1246,7 @@ def generate_review_queue(body: QueueGenerateRequest) -> Dict[str, Any]:
             "company_name": r.get("company_name") or "",
             "subject": rendered_subj,
             "status": "draft",
+            "smtp_account_id": body.smtp_account_id,
         })
 
     conn.commit()
@@ -1193,7 +1321,7 @@ def get_queue_item(item_id: str) -> Dict[str, Any]:
 
 @router.put("/queue/{item_id}")
 def update_queue_item(item_id: str, body: QueueItemUpdate) -> Dict[str, Any]:
-    """Edit an individual queue item's subject, body, or recipient before sending."""
+    """Edit an individual queue item's subject, body, sender account, or recipient before sending."""
     conn = get_connection()
     row = conn.execute("SELECT * FROM email_queue_items WHERE id = ?", (item_id,)).fetchone()
     if not row:
@@ -1205,6 +1333,7 @@ def update_queue_item(item_id: str, body: QueueItemUpdate) -> Dict[str, Any]:
     new_name = body.recipient_name if body.recipient_name is not None else current["recipient_name"]
     new_email = body.recipient_email if body.recipient_email is not None else current["recipient_email"]
     new_company = body.company_name if body.company_name is not None else current["company_name"]
+    new_smtp_id = body.smtp_account_id if body.smtp_account_id is not None else current.get("smtp_account_id")
 
     new_body = current["body"]
     new_raw = current["raw_body"]
@@ -1215,10 +1344,10 @@ def update_queue_item(item_id: str, body: QueueItemUpdate) -> Dict[str, Any]:
     conn.execute(
         """
         UPDATE email_queue_items
-        SET subject = ?, body = ?, raw_body = ?, recipient_name = ?, recipient_email = ?, company_name = ?, updated_at = CURRENT_TIMESTAMP
+        SET subject = ?, body = ?, raw_body = ?, recipient_name = ?, recipient_email = ?, company_name = ?, smtp_account_id = ?, updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
         """,
-        (new_subj, new_body, new_raw, new_name, new_email, new_company, item_id),
+        (new_subj, new_body, new_raw, new_name, new_email, new_company, new_smtp_id, item_id),
     )
     conn.commit()
     conn.close()
@@ -1226,7 +1355,11 @@ def update_queue_item(item_id: str, body: QueueItemUpdate) -> Dict[str, Any]:
 
 
 @router.post("/queue/{item_id}/send")
-def send_queue_item(item_id: str) -> Dict[str, Any]:
+def send_queue_item(
+    item_id: str,
+    body: Optional[QueueSendRequest] = None,
+    smtp_account_id: Optional[str] = Query(None),
+) -> Dict[str, Any]:
     """Send this single individual email from the queue via SMTP."""
     conn = get_connection()
     row = conn.execute("SELECT * FROM email_queue_items WHERE id = ?", (item_id,)).fetchone()
@@ -1248,12 +1381,15 @@ def send_queue_item(item_id: str) -> Dict[str, Any]:
             attachment_path = tpl["attachment_path"]
             attachment_name = tpl["attachment_name"]
 
-    cfg = get_smtp_config()
+    target_smtp_id = (body.smtp_account_id if body and body.smtp_account_id else None) or smtp_account_id or item.get("smtp_account_id")
+    cfg = get_smtp_config(target_smtp_id)
+    sender_email = cfg.get("smtp_user", "")
+
     success, err_msg = send_email(
         to_email=to_email,
         subject=item["subject"],
         body=item["body"],
-        smtp_cfg=cfg,
+        config=cfg,
         attachment_path=attachment_path,
         attachment_name=attachment_name,
     )
@@ -1261,24 +1397,24 @@ def send_queue_item(item_id: str) -> Dict[str, Any]:
     now_iso = datetime.now(timezone.utc).isoformat()
     if success:
         conn.execute(
-            "UPDATE email_queue_items SET status = 'sent', sent_at = ?, error_message = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (now_iso, item_id),
+            "UPDATE email_queue_items SET status = 'sent', sent_at = ?, error_message = NULL, smtp_account_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (now_iso, target_smtp_id, item_id),
         )
         log_id = str(uuid.uuid4())
         conn.execute(
             """
-            INSERT INTO email_campaign_logs (id, campaign_id, recipient_name, recipient_email, company_name, status, sent_at)
-            VALUES (?, ?, ?, ?, ?, 'sent', ?)
+            INSERT INTO email_campaign_logs (id, campaign_id, recipient_name, recipient_email, company_name, status, sent_at, sender_email)
+            VALUES (?, ?, ?, ?, ?, 'sent', ?, ?)
             """,
-            (log_id, "1-by-1-queue", item["recipient_name"], to_email, item["company_name"], now_iso),
+            (log_id, "1-by-1-queue", item["recipient_name"], to_email, item["company_name"], now_iso, sender_email),
         )
         conn.commit()
         conn.close()
-        return {"status": "success", "message": f"Email successfully sent to {to_email}!"}
+        return {"status": "success", "message": f"Email successfully sent to {to_email} (via {sender_email})!"}
     else:
         conn.execute(
-            "UPDATE email_queue_items SET status = 'failed', error_message = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (err_msg, item_id),
+            "UPDATE email_queue_items SET status = 'failed', error_message = ?, smtp_account_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (err_msg, target_smtp_id, item_id),
         )
         conn.commit()
         conn.close()

@@ -157,14 +157,14 @@ def _get_manual_recipients(manual_emails: List[str]) -> List[Dict[str, Any]]:
     return recipients
 
 
-def _log_recipient(campaign_id: str, recipient: Dict, status: str, error: str = "") -> None:
+def _log_recipient(campaign_id: str, recipient: Dict, status: str, error: str = "", sender_email: Optional[str] = None) -> None:
     """Save one delivery log row to SQLite."""
     try:
         conn = get_connection()
         conn.execute("""
             INSERT INTO email_campaign_logs
-                (id, campaign_id, recipient_name, recipient_email, company_name, status, error_message)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                (id, campaign_id, recipient_name, recipient_email, company_name, status, error_message, sender_email)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             str(uuid.uuid4()),
             campaign_id,
@@ -173,6 +173,7 @@ def _log_recipient(campaign_id: str, recipient: Dict, status: str, error: str = 
             recipient.get("company_name") or "",
             status,
             error,
+            sender_email or "",
         ))
         conn.commit()
         conn.close()
@@ -206,13 +207,16 @@ def run_campaign_in_background(
     delay_seconds: float = 0.8,
     attachment_path: Optional[str] = None,
     attachment_name: Optional[str] = None,
+    smtp_account_id: Optional[str] = None,
 ) -> None:
     """
     Background thread worker: iterates recipients, renders per-person,
     sends email with optional attachment, logs result, and updates counters.
+    Uses designated SMTP account if provided, or default account.
     """
-    smtp_cfg = get_smtp_config()
-    sender_name = smtp_cfg.get("from_name", "LeadPulse AI")
+    smtp_cfg = get_smtp_config(smtp_account_id)
+    sender_name = smtp_cfg.get("from_name", "HirePilot AI")
+    sender_email = smtp_cfg.get("smtp_user", "")
 
     _update_campaign(campaign_id, status="running", total=len(recipients))
 
@@ -240,10 +244,10 @@ def run_campaign_in_background(
 
         if ok:
             sent += 1
-            _log_recipient(campaign_id, r, "sent")
+            _log_recipient(campaign_id, r, "sent", sender_email=sender_email)
         else:
             failed += 1
-            _log_recipient(campaign_id, r, "failed", err)
+            _log_recipient(campaign_id, r, "failed", error=err, sender_email=sender_email)
 
         _update_campaign(campaign_id, sent=sent, failed_count=failed)
         time.sleep(delay_seconds)
@@ -318,6 +322,7 @@ def launch_campaign(
     delay_seconds: float = 0.8,
     attachment_path: Optional[str] = None,
     attachment_name: Optional[str] = None,
+    smtp_account_id: Optional[str] = None,
 ) -> int:
     """
     Build recipient list from requested sources and launch the campaign.
@@ -334,7 +339,7 @@ def launch_campaign(
 
     t = threading.Thread(
         target=run_campaign_in_background,
-        args=(campaign_id, subject_template, body_template, recipients, delay_seconds, attachment_path, attachment_name),
+        args=(campaign_id, subject_template, body_template, recipients, delay_seconds, attachment_path, attachment_name, smtp_account_id),
         daemon=True,
     )
     t.start()

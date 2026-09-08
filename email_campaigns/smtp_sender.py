@@ -92,20 +92,23 @@ def test_smtp_connection(config: dict | None = None) -> Tuple[bool, str]:
         return False, f"SMTP error: {err}"
 
 
-def send_email(to_email: str, subject: str, html_body: str,
+def send_email(to_email: str, subject: str, html_body: str = "",
                config: dict | None = None,
                attachment_path: Optional[str] = None,
-               attachment_name: Optional[str] = None) -> Tuple[bool, str]:
+               attachment_name: Optional[str] = None,
+               body: Optional[str] = None,
+               smtp_cfg: Optional[dict] = None) -> Tuple[bool, str]:
     """
     Send a single HTML email with optional attachment.
     Returns (True, "") on success or (False, error_message) on failure.
     """
-    cfg = config or get_smtp_config()
+    email_content = body if body is not None else html_body
+    cfg = config or smtp_cfg or get_smtp_config()
     host = cfg.get("smtp_host", "").strip()
     port = int(cfg.get("smtp_port", 587))
     user = cfg.get("smtp_user", "").strip()
     password = cfg.get("smtp_pass", "").strip()
-    from_name = cfg.get("from_name", "LeadPulse AI")
+    from_name = cfg.get("from_name", "HirePilot AI")
     use_ssl = cfg.get("use_ssl", False)
     use_tls = cfg.get("use_tls", True)
 
@@ -114,7 +117,7 @@ def send_email(to_email: str, subject: str, html_body: str,
 
     try:
         msg = _build_message(
-            user, from_name, to_email, subject, html_body,
+            user, from_name, to_email, subject, email_content,
             attachment_path=attachment_path,
             attachment_name=attachment_name
         )
