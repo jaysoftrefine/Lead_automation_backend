@@ -4,7 +4,7 @@ import re
 import socket
 import smtplib
 import dns.resolver
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional, Tuple, List
 from core.logging import logger
 
 # RFC 5322 standard email regex
