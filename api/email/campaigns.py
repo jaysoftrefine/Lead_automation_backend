@@ -1,5 +1,6 @@
 import json
 import uuid
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException, Query
 
@@ -7,10 +8,14 @@ from schemas import (
     CampaignCreate,
     CampaignUpdate,
     CampaignPreviewGeneratedRequest,
+    SequenceStep,
 )
 from email_campaigns.db import (
     get_connection,
     get_smtp_config,
+    create_sequence_steps,
+    list_sequence_steps,
+    update_sequence_step,
 )
 from email_campaigns.smtp_sender import test_smtp_connection
 from email_campaigns.template_engine import (
@@ -68,26 +73,46 @@ def create_campaign(body: CampaignCreate) -> Dict[str, Any]:
         "delay_seconds": body.delay_seconds,
     }
 
+    campaign_type = body.campaign_type or "one_shot"
+    is_sequence    = campaign_type == "sequence" and body.steps and len(body.steps) > 0
+    start_date     = datetime.now(timezone.utc).isoformat()
+
     if body.draft:
         # Save as draft without launching
         conn.execute("""
             INSERT INTO email_campaigns
-                (id, name, template_id, template_name, subject, attachment_path, attachment_name, status, audience_filter, smtp_account_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)
+                (id, name, template_id, template_name, subject, attachment_path, attachment_name,
+                 status, audience_filter, smtp_account_id,
+                 campaign_type, start_date, reminder_email, reminder_hours_before)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?)
         """, (
             cid, body.name.strip(), body.template_id,
             tpl["name"], tpl["subject"],
             attachment_path, attachment_name,
             json.dumps(config_payload),
             body.smtp_account_id,
+            campaign_type, start_date,
+            body.reminder_email or "",
+            body.reminder_hours_before or 24,
         ))
         conn.commit()
         row = conn.execute("SELECT * FROM email_campaigns WHERE id = ?", (cid,)).fetchone()
         conn.close()
+
+        # Persist sequence steps for draft sequence campaigns
+        steps_data = []
+        if is_sequence:
+            steps_data = create_sequence_steps(
+                cid,
+                [s.dict() for s in body.steps],
+                start_date,
+            )
+
         return {
             "status": "success",
             "message": "Campaign saved as draft successfully.",
             "data": dict(row),
+            "steps": steps_data,
         }
 
     # Validate SMTP before launching
@@ -102,19 +127,46 @@ def create_campaign(body: CampaignCreate) -> Dict[str, Any]:
 
     conn.execute("""
         INSERT INTO email_campaigns
-            (id, name, template_id, template_name, subject, attachment_path, attachment_name, status, audience_filter, smtp_account_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)
+            (id, name, template_id, template_name, subject, attachment_path, attachment_name,
+             status, audience_filter, smtp_account_id,
+             campaign_type, start_date, reminder_email, reminder_hours_before)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?)
     """, (
         cid, body.name.strip(), body.template_id,
         tpl["name"], tpl["subject"],
         attachment_path, attachment_name,
         json.dumps(config_payload),
         body.smtp_account_id,
+        campaign_type, start_date,
+        body.reminder_email or "",
+        body.reminder_hours_before or 24,
     ))
     conn.commit()
     conn.close()
 
-    # Launch in background
+    # Sequence campaign — persist steps; scheduler will fire them on schedule
+    if is_sequence:
+        steps_data = create_sequence_steps(
+            cid,
+            [s.dict() for s in body.steps],
+            start_date,
+        )
+        # Mark overall campaign as 'scheduled'
+        conn2 = get_connection()
+        conn2.execute(
+            "UPDATE email_campaigns SET status = 'scheduled' WHERE id = ?", (cid,)
+        )
+        conn2.commit()
+        conn2.close()
+
+        step_count = len(steps_data)
+        return {
+            "status": "success",
+            "message": f"Sequence campaign created with {step_count} step(s). Step 1 will fire immediately; follow-ups will run automatically.",
+            "data": {"campaign_id": cid, "steps": steps_data},
+        }
+
+    # One-shot campaign — launch immediately in background
     total = launch_campaign(
         campaign_id=cid,
         subject_template=tpl["subject"],
@@ -127,6 +179,7 @@ def create_campaign(body: CampaignCreate) -> Dict[str, Any]:
         attachment_path=attachment_path,
         attachment_name=attachment_name,
         smtp_account_id=body.smtp_account_id,
+        cc=tpl.get("cc") or "",
     )
 
     return {
@@ -165,6 +218,12 @@ def update_campaign(campaign_id: str, body: CampaignUpdate) -> Dict[str, Any]:
     if body.smtp_account_id is not None:
         updates["smtp_account_id"] = body.smtp_account_id
 
+    if body.reminder_email is not None:
+        updates["reminder_email"] = body.reminder_email
+
+    if body.reminder_hours_before is not None:
+        updates["reminder_hours_before"] = body.reminder_hours_before
+
     # Merge audience filter configuration
     existing_filter = {}
     try:
@@ -195,12 +254,30 @@ def update_campaign(campaign_id: str, body: CampaignUpdate) -> Dict[str, Any]:
     )
     conn.commit()
     row = conn.execute("SELECT * FROM email_campaigns WHERE id = ?", (campaign_id,)).fetchone()
+
+    # Update sequence steps if provided
+    steps_data = []
+    if body.steps is not None:
+        camp_row = dict(row)
+        start_date = camp_row.get("start_date") or datetime.now(timezone.utc).isoformat()
+        steps_data = create_sequence_steps(
+            campaign_id,
+            [s.dict() for s in body.steps],
+            start_date,
+        )
+        conn.execute(
+            "UPDATE email_campaigns SET campaign_type = 'sequence' WHERE id = ?",
+            (campaign_id,)
+        )
+        conn.commit()
+
     conn.close()
 
     return {
         "status": "success",
         "message": "Campaign updated successfully.",
         "data": dict(row),
+        "steps": steps_data,
     }
 
 
@@ -276,9 +353,11 @@ def launch_campaign_by_id(campaign_id: str) -> Dict[str, Any]:
 
 @router.delete("/campaigns/{campaign_id}")
 def delete_campaign(campaign_id: str) -> Dict[str, Any]:
-    """Delete a campaign and its associated delivery logs."""
+    """Delete a campaign and its associated delivery logs and sequence steps."""
     conn = get_connection()
     conn.execute("DELETE FROM email_campaign_logs WHERE campaign_id = ?", (campaign_id,))
+    conn.execute("DELETE FROM campaign_sequence_recipients WHERE campaign_id = ?", (campaign_id,))
+    conn.execute("DELETE FROM campaign_sequences WHERE campaign_id = ?", (campaign_id,))
     res = conn.execute("DELETE FROM email_campaigns WHERE id = ?", (campaign_id,))
     conn.commit()
     conn.close()
@@ -287,6 +366,43 @@ def delete_campaign(campaign_id: str) -> Dict[str, Any]:
         raise HTTPException(status_code=404, detail="Campaign not found.")
 
     return {"status": "success", "message": "Campaign deleted successfully."}
+
+
+@router.get("/campaigns/{campaign_id}/steps")
+def get_campaign_steps(campaign_id: str) -> Dict[str, Any]:
+    """List all sequence steps for a campaign."""
+    conn = get_connection()
+    row = conn.execute("SELECT id FROM email_campaigns WHERE id = ?", (campaign_id,)).fetchone()
+    conn.close()
+    if not row:
+        raise HTTPException(status_code=404, detail="Campaign not found.")
+    steps = list_sequence_steps(campaign_id)
+    return {"status": "success", "data": steps}
+
+
+@router.put("/campaigns/{campaign_id}/steps")
+def replace_campaign_steps(
+    campaign_id: str,
+    body: List[SequenceStep],
+) -> Dict[str, Any]:
+    """Replace all sequence steps for a campaign (idempotent)."""
+    conn = get_connection()
+    camp = conn.execute("SELECT * FROM email_campaigns WHERE id = ?", (campaign_id,)).fetchone()
+    conn.close()
+    if not camp:
+        raise HTTPException(status_code=404, detail="Campaign not found.")
+
+    camp_dict = dict(camp)
+    start_date = camp_dict.get("start_date") or datetime.now(timezone.utc).isoformat()
+    steps = create_sequence_steps(campaign_id, [s.dict() for s in body], start_date)
+
+    # Ensure campaign_type is set to sequence
+    conn2 = get_connection()
+    conn2.execute("UPDATE email_campaigns SET campaign_type = 'sequence' WHERE id = ?", (campaign_id,))
+    conn2.commit()
+    conn2.close()
+
+    return {"status": "success", "message": f"{len(steps)} step(s) saved.", "data": steps}
 
 
 @router.post("/campaigns/preview-generated")

@@ -126,6 +126,9 @@ class LeadsRepository:
         company_size: Optional[str] = None,
         job_type: Optional[str] = None,
         hours_old: Optional[int] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+        date_field: Optional[str] = "any",
         min_score: int = 0,
         has_contacts: Optional[bool] = None,
         limit: int = 50,
@@ -161,6 +164,49 @@ class LeadsRepository:
                 cutoff = (datetime.utcnow() - timedelta(hours=hours_old)).isoformat()
                 conditions.append("enriched_leads.created_at >= ?")
                 params.append(cutoff)
+
+            if date_from or date_to:
+                df = (date_field or "any").lower().strip()
+                if df == "posted":
+                    if date_from:
+                        conditions.append("enriched_leads.date_posted >= ?")
+                        params.append(date_from)
+                    if date_to:
+                        conditions.append("enriched_leads.date_posted <= ?")
+                        params.append(date_to)
+                elif df in ("scraped", "added"):
+                    if date_from:
+                        conditions.append("substr(COALESCE(enriched_leads.scraped_at, enriched_leads.created_at), 1, 10) >= ?")
+                        params.append(date_from)
+                    if date_to:
+                        conditions.append("substr(COALESCE(enriched_leads.scraped_at, enriched_leads.created_at), 1, 10) <= ?")
+                        params.append(date_to)
+                else:  # any
+                    sub = []
+                    sub_p = []
+                    if date_from and date_to:
+                        sub.append("(enriched_leads.date_posted IS NOT NULL AND enriched_leads.date_posted != '' AND enriched_leads.date_posted >= ? AND enriched_leads.date_posted <= ?)")
+                        sub_p.extend([date_from, date_to])
+                    elif date_from:
+                        sub.append("(enriched_leads.date_posted IS NOT NULL AND enriched_leads.date_posted != '' AND enriched_leads.date_posted >= ?)")
+                        sub_p.append(date_from)
+                    elif date_to:
+                        sub.append("(enriched_leads.date_posted IS NOT NULL AND enriched_leads.date_posted != '' AND enriched_leads.date_posted <= ?)")
+                        sub_p.append(date_to)
+
+                    if date_from and date_to:
+                        sub.append("(substr(COALESCE(enriched_leads.scraped_at, enriched_leads.created_at), 1, 10) >= ? AND substr(COALESCE(enriched_leads.scraped_at, enriched_leads.created_at), 1, 10) <= ?)")
+                        sub_p.extend([date_from, date_to])
+                    elif date_from:
+                        sub.append("(substr(COALESCE(enriched_leads.scraped_at, enriched_leads.created_at), 1, 10) >= ?)")
+                        sub_p.append(date_from)
+                    elif date_to:
+                        sub.append("(substr(COALESCE(enriched_leads.scraped_at, enriched_leads.created_at), 1, 10) <= ?)")
+                        sub_p.append(date_to)
+
+                    if sub:
+                        conditions.append(f"({' OR '.join(sub)})")
+                        params.extend(sub_p)
 
             if company_size and company_size.lower() != "all":
                 c_size = company_size.lower().strip()
@@ -372,6 +418,54 @@ class LeadsRepository:
         filters = filters or {}
         country_filter = (filters.get("country") or "").strip().lower()
         lead_type_filter = (filters.get("lead_type") or "").strip().lower()
+
+        # Date filter resolution
+        preset = (filters.get("date_preset") or "").strip().lower()
+        date_from = (filters.get("date_from") or "").strip()
+        date_to = (filters.get("date_to") or "").strip()
+        date_field = (filters.get("date_field") or "any").strip().lower()
+
+        if preset and preset not in ("custom", "all"):
+            today = datetime.utcnow().date()
+            if preset in ("today", "24h"):
+                date_from = today.isoformat()
+                date_to = today.isoformat()
+            elif preset == "7d":
+                date_from = (today - timedelta(days=7)).isoformat()
+                date_to = today.isoformat()
+            elif preset == "14d":
+                date_from = (today - timedelta(days=14)).isoformat()
+                date_to = today.isoformat()
+            elif preset == "30d":
+                date_from = (today - timedelta(days=30)).isoformat()
+                date_to = today.isoformat()
+            elif preset == "90d":
+                date_from = (today - timedelta(days=90)).isoformat()
+                date_to = today.isoformat()
+
+        def matches_date(dp: Optional[str], sa: Optional[str], ca: Optional[str]) -> bool:
+            if not date_from and not date_to:
+                return True
+            dp_clean = (dp or "").strip()[:10]
+            sa_clean = (sa or "").strip()[:10]
+            ca_clean = (ca or "").strip()[:10]
+
+            def in_range(val: str) -> bool:
+                if not val or len(val) < 10:
+                    return False
+                if date_from and val < date_from:
+                    return False
+                if date_to and val > date_to:
+                    return False
+                return True
+
+            if date_field == "posted":
+                return in_range(dp_clean)
+            elif date_field in ("scraped", "added"):
+                return in_range(sa_clean) or in_range(ca_clean)
+            else:  # any
+                return in_range(dp_clean) or in_range(sa_clean) or in_range(ca_clean)
+
         recipients = []
         seen_emails = set()
 
@@ -379,7 +473,8 @@ class LeadsRepository:
             cur = conn.cursor()
             # 1. From enriched_leads
             cur.execute("""
-                SELECT company, company_domain, location, contacts, COALESCE(lead_type, 'others') as lead_type 
+                SELECT company, company_domain, location, contacts, COALESCE(lead_type, 'others') as lead_type,
+                       date_posted, scraped_at, created_at, updated_at
                 FROM enriched_leads 
                 WHERE contacts IS NOT NULL AND contacts != '[]'
             """)
@@ -392,11 +487,16 @@ class LeadsRepository:
                 if lead_type_filter and lead_type_filter != "all" and row_lt != lead_type_filter:
                     continue
 
+                if not matches_date(row["date_posted"], row["scraped_at"], row["created_at"]):
+                    continue
+
                 try:
                     contacts = json.loads(row["contacts"])
                 except Exception:
                     contacts = []
 
+                # Date when the job was scraped
+                lead_date = (row["scraped_at"][:10] if row["scraped_at"] else (row["created_at"][:10] if row["created_at"] else (row["date_posted"] or "")))
                 for c in contacts:
                     email = (c.get("email") or "").strip()
                     if email and email.lower() not in seen_emails:
@@ -413,12 +513,17 @@ class LeadsRepository:
                             "category":     "Job Lead",
                             "source":       "job_leads",
                             "lead_type":    row_lt,
+                            "date":         lead_date,
+                            "scraped_at":   row["scraped_at"] or row["created_at"] or None,
+                            "created_at":   row["created_at"] or None,
+                            "date_posted":  row["date_posted"] or None,
                         })
 
             # 2. From job_leads (historical / legacy scraped data)
             if not lead_type_filter or lead_type_filter in ("all", "others"):
                 cur.execute("""
-                    SELECT company, company_website, location, emails, phones, recruiter_name, title
+                    SELECT company, company_website, location, emails, phones, recruiter_name, title,
+                           date_posted, created_at, updated_at
                     FROM job_leads
                     WHERE emails IS NOT NULL AND emails != '' AND emails != 'None'
                 """)
@@ -427,6 +532,10 @@ class LeadsRepository:
                     if country_filter and country_filter not in loc.lower():
                         continue
 
+                    if not matches_date(row["date_posted"], None, row["created_at"]):
+                        continue
+
+                    lead_date = (row["created_at"][:10] if row["created_at"] else (row["date_posted"] or ""))
                     raw_emails = row["emails"] or ""
                     for em in re.split(r"[,;\s]+", raw_emails):
                         email = em.strip()
@@ -444,6 +553,10 @@ class LeadsRepository:
                                 "category":     "Job Lead",
                                 "source":       "job_leads",
                                 "lead_type":    "others",
+                                "date":         lead_date,
+                                "scraped_at":   row["created_at"] or None,
+                                "created_at":   row["created_at"] or None,
+                                "date_posted":  row["date_posted"] or None,
                             })
 
             return recipients

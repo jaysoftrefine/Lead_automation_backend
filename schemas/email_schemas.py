@@ -10,6 +10,7 @@ class TemplateCreate(BaseModel):
     subject: str
     body: str
     tags: Optional[str] = ""
+    cc: Optional[str] = None          # comma-separated CC addresses
     attachment_path: Optional[str] = None
     attachment_name: Optional[str] = None
 
@@ -20,6 +21,7 @@ class TemplateUpdate(BaseModel):
     subject: Optional[str] = None
     body: Optional[str] = None
     tags: Optional[str] = None
+    cc: Optional[str] = None          # comma-separated CC addresses
     attachment_path: Optional[str] = None
     attachment_name: Optional[str] = None
 
@@ -61,17 +63,28 @@ class SMTPAccountUpdate(BaseModel):
     is_default: Optional[bool] = None
 
 
+class SequenceStep(BaseModel):
+    """A single step in an email drip sequence."""
+    template_id: str
+    days_after: int = 0   # days after campaign start_date when this step fires
+
+
 class CampaignCreate(BaseModel):
     """Payload to create a new outreach campaign."""
     name: str
-    template_id: str
+    template_id: str                                    # used for one_shot campaigns
     smtp_account_id: Optional[str] = None
-    audience_sources: List[str] = ["sqlite"]   # "sqlite", "mongo", "manual", "selected"
-    audience_filters: Dict[str, Any] = {}       # country, category
+    audience_sources: List[str] = ["sqlite"]            # "sqlite", "mongo", "manual", "selected"
+    audience_filters: Dict[str, Any] = {}               # country, category
     manual_emails: Optional[List[str]] = None
     selected_recipients: Optional[List[Dict[str, Any]]] = None
     delay_seconds: float = 0.8
     draft: bool = False
+    # Sequence / drip fields
+    campaign_type: str = "one_shot"                     # "one_shot" | "sequence"
+    steps: Optional[List[SequenceStep]] = None          # drip steps (sequence campaigns)
+    reminder_email: Optional[str] = None                # admin email for pre-send reminders
+    reminder_hours_before: int = 24                     # hours before step to send reminder
 
 
 class CampaignUpdate(BaseModel):
@@ -85,6 +98,10 @@ class CampaignUpdate(BaseModel):
     selected_recipients: Optional[List[Dict[str, Any]]] = None
     delay_seconds: Optional[float] = None
     status: Optional[str] = None
+    # Sequence / drip fields
+    steps: Optional[List[SequenceStep]] = None
+    reminder_email: Optional[str] = None
+    reminder_hours_before: Optional[int] = None
 
 
 class TestEmailBody(BaseModel):

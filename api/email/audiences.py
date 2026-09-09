@@ -24,6 +24,12 @@ def browse_recipients(
     category: str = "",
     search: str = "",
     lead_type: str = "",
+    date_preset: str = "",
+    date_from: str = "",
+    date_to: str = "",
+    date_field: str = "any",
+    sort_by: str = "date",
+    sort_dir: str = "desc",
     page: int = 1,
     per_page: int = 25,
 ) -> Dict[str, Any]:
@@ -36,6 +42,14 @@ def browse_recipients(
         filters["category"] = category.strip()
     if lead_type.strip() and lead_type.strip().lower() != "all":
         filters["lead_type"] = lead_type.strip().lower()
+    if date_preset.strip():
+        filters["date_preset"] = date_preset.strip()
+    if date_from.strip():
+        filters["date_from"] = date_from.strip()
+    if date_to.strip():
+        filters["date_to"] = date_to.strip()
+    if date_field.strip():
+        filters["date_field"] = date_field.strip()
 
     all_recipients: List[Dict[str, Any]] = []
     seen = set()
@@ -45,6 +59,7 @@ def browse_recipients(
             e = (r.get("email") or "").lower().strip()
             if e and e not in seen:
                 seen.add(e)
+                scraped_date = r.get("date") or (r.get("created_at") or "")[:10]
                 all_recipients.append({
                     "id": f"sqlite-{e}",
                     "person_name": r.get("person_name") or "Founder / Leadership",
@@ -57,6 +72,10 @@ def browse_recipients(
                     "category": r.get("category") or "",
                     "source": "sqlite",
                     "lead_type": "company",
+                    "date": scraped_date,
+                    "scraped_at": r.get("scraped_at") or r.get("created_at"),
+                    "created_at": r.get("created_at"),
+                    "date_posted": None,
                 })
 
     if "mongo" in src_list or "job_leads" in src_list:
@@ -65,6 +84,7 @@ def browse_recipients(
                 e = (r.get("email") or "").lower().strip()
                 if e and e not in seen:
                     seen.add(e)
+                    scraped_date = r.get("date") or (r.get("scraped_at") or "")[:10] or (r.get("created_at") or "")[:10]
                     all_recipients.append({
                         "id": f"leads-{e}",
                         "person_name": r.get("person_name") or "Contact",
@@ -77,6 +97,10 @@ def browse_recipients(
                         "category": r.get("category") or "Job Lead",
                         "source": "mongo" if "mongo" in src_list else "job_leads",
                         "lead_type": r.get("lead_type") or "others",
+                        "date": scraped_date,
+                        "scraped_at": r.get("scraped_at") or r.get("created_at"),
+                        "created_at": r.get("created_at") or None,
+                        "date_posted": r.get("date_posted") or None,
                     })
         except Exception:
             pass
@@ -90,6 +114,18 @@ def browse_recipients(
             if q in haystack:
                 filtered.append(r)
         all_recipients = filtered
+
+    # Sort recipients (default: newest scraped date first)
+    def get_sort_key(item: Dict[str, Any]) -> str:
+        if sort_by == "name":
+            return (item.get("person_name") or "").lower()
+        elif sort_by == "company":
+            return (item.get("company_name") or "").lower()
+        else:  # "date"
+            return str(item.get("scraped_at") or item.get("created_at") or item.get("date") or "")
+
+    is_desc = (sort_dir.lower() != "asc")
+    all_recipients.sort(key=get_sort_key, reverse=is_desc)
 
     total = len(all_recipients)
     start = (page - 1) * per_page

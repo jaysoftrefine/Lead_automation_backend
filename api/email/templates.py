@@ -39,9 +39,9 @@ def create_template(body: TemplateCreate) -> Dict[str, Any]:
     tid = str(uuid.uuid4())
     conn = get_connection()
     conn.execute("""
-        INSERT INTO email_templates (id, name, subject, body, tags, attachment_path, attachment_name)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (tid, body.name.strip(), body.subject.strip(), body.body, body.tags or "", body.attachment_path, body.attachment_name))
+        INSERT INTO email_templates (id, name, subject, body, tags, cc, attachment_path, attachment_name)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, (tid, body.name.strip(), body.subject.strip(), body.body, body.tags or "", body.cc or "", body.attachment_path, body.attachment_name))
     conn.commit()
     row = conn.execute("SELECT * FROM email_templates WHERE id = ?", (tid,)).fetchone()
     conn.close()
@@ -86,6 +86,8 @@ def update_template(template_id: str, body: TemplateUpdate) -> Dict[str, Any]:
         updates["body"] = body.body
     if body.tags is not None:
         updates["tags"] = body.tags
+    if body.cc is not None:
+        updates["cc"] = body.cc
     if body.attachment_path is not None:
         updates["attachment_path"] = body.attachment_path
     if body.attachment_name is not None:

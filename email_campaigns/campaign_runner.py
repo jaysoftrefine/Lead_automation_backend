@@ -7,7 +7,7 @@ import json
 import time
 import uuid
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Any, Optional
 
 from email_campaigns.db import get_connection, get_smtp_config
@@ -15,10 +15,38 @@ from email_campaigns.smtp_sender import send_email
 from email_campaigns.template_engine import build_context, resolve_variables
 
 
+def _resolve_date_range(filters: Dict[str, Any]) -> tuple[Optional[str], Optional[str], str]:
+    """Resolves date_from, date_to, and date_field from filters dictionary."""
+    preset = (filters.get("date_preset") or "").strip().lower()
+    date_from = (filters.get("date_from") or "").strip()
+    date_to = (filters.get("date_to") or "").strip()
+    date_field = (filters.get("date_field") or "any").strip().lower()
+
+    if preset and preset not in ("custom", "all"):
+        today = datetime.utcnow().date()
+        if preset in ("today", "24h"):
+            date_from = today.isoformat()
+            date_to = today.isoformat()
+        elif preset == "7d":
+            date_from = (today - timedelta(days=7)).isoformat()
+            date_to = today.isoformat()
+        elif preset == "14d":
+            date_from = (today - timedelta(days=14)).isoformat()
+            date_to = today.isoformat()
+        elif preset == "30d":
+            date_from = (today - timedelta(days=30)).isoformat()
+            date_to = today.isoformat()
+        elif preset == "90d":
+            date_from = (today - timedelta(days=90)).isoformat()
+            date_to = today.isoformat()
+
+    return date_from or None, date_to or None, date_field
+
+
 def _get_recipients_from_sqlite(filters: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
     Fetch enriched EU Startups people with valid emails as campaign recipients.
-    Applies optional country / category / has_email filters.
+    Applies optional country / category / date filters.
     """
     from eu_startups.db import get_connection as get_eu_connection
     conn = get_eu_connection()
@@ -39,6 +67,16 @@ def _get_recipients_from_sqlite(filters: Dict[str, Any]) -> List[Dict[str, Any]]
         wheres.append("LOWER(TRIM(s.category)) = LOWER(TRIM(?))")
         params.append(category)
 
+    date_from, date_to, date_field = _resolve_date_range(filters)
+    # Startups don't have job postings, so apply if any or scraped/added
+    if date_field in ("any", "scraped", "added"):
+        if date_from:
+            wheres.append("substr(COALESCE(s.created_at, s.updated_at), 1, 10) >= ?")
+            params.append(date_from)
+        if date_to:
+            wheres.append("substr(COALESCE(s.created_at, s.updated_at), 1, 10) <= ?")
+            params.append(date_to)
+
     where_sql = "WHERE " + " AND ".join(wheres)
 
     rows = cur.execute(f"""
@@ -52,7 +90,9 @@ def _get_recipients_from_sqlite(filters: Dict[str, Any]) -> List[Dict[str, Any]]
             s.country,
             s.category,
             s.description AS company_description,
-            s.tags        AS company_tags
+            s.tags        AS company_tags,
+            s.created_at,
+            s.updated_at
         FROM people p
         JOIN startups s ON s.id = p.startup_id
         {where_sql}
@@ -60,7 +100,14 @@ def _get_recipients_from_sqlite(filters: Dict[str, Any]) -> List[Dict[str, Any]]
     """, params).fetchall()
 
     conn.close()
-    return [dict(r) for r in rows]
+    recipients = []
+    for r in rows:
+        d = dict(r)
+        d["date"] = (d.get("created_at") or "")[:10] or (d.get("updated_at") or "")[:10]
+        d["date_posted"] = None
+        d["scraped_at"] = d.get("created_at")
+        recipients.append(d)
+    return recipients
 
 
 def _get_recipients_from_mongo(filters: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -208,10 +255,11 @@ def run_campaign_in_background(
     attachment_path: Optional[str] = None,
     attachment_name: Optional[str] = None,
     smtp_account_id: Optional[str] = None,
+    cc: Optional[str] = None,
 ) -> None:
     """
     Background thread worker: iterates recipients, renders per-person,
-    sends email with optional attachment, logs result, and updates counters.
+    sends email with optional attachment and CC, logs result, and updates counters.
     Uses designated SMTP account if provided, or default account.
     """
     smtp_cfg = get_smtp_config(smtp_account_id)
@@ -239,7 +287,8 @@ def run_campaign_in_background(
         ok, err = send_email(
             r["email"], rendered_subject, rendered_body, smtp_cfg,
             attachment_path=attachment_path,
-            attachment_name=attachment_name
+            attachment_name=attachment_name,
+            cc=cc or "",
         )
 
         if ok:
@@ -315,14 +364,15 @@ def launch_campaign(
     campaign_id: str,
     subject_template: str,
     body_template: str,
-    audience_sources: List[str],        # e.g. ["sqlite", "mongo", "manual", "selected"]
-    audience_filters: Dict[str, Any],   # country, category, etc.
+    audience_sources: List[str],
+    audience_filters: Dict[str, Any],
     manual_emails: Optional[List[str]] = None,
     selected_recipients: Optional[List[Dict[str, Any]]] = None,
     delay_seconds: float = 0.8,
     attachment_path: Optional[str] = None,
     attachment_name: Optional[str] = None,
     smtp_account_id: Optional[str] = None,
+    cc: Optional[str] = None,
 ) -> int:
     """
     Build recipient list from requested sources and launch the campaign.
@@ -339,7 +389,7 @@ def launch_campaign(
 
     t = threading.Thread(
         target=run_campaign_in_background,
-        args=(campaign_id, subject_template, body_template, recipients, delay_seconds, attachment_path, attachment_name, smtp_account_id),
+        args=(campaign_id, subject_template, body_template, recipients, delay_seconds, attachment_path, attachment_name, smtp_account_id, cc),
         daemon=True,
     )
     t.start()

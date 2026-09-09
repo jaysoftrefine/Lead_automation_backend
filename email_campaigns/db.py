@@ -34,6 +34,7 @@ def init_email_tables() -> None:
             subject         TEXT NOT NULL,
             body            TEXT NOT NULL,
             tags            TEXT DEFAULT '',
+            cc              TEXT DEFAULT '',
             attachment_path TEXT,
             attachment_name TEXT,
             created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -44,21 +45,25 @@ def init_email_tables() -> None:
     # Bulk Campaigns
     cur.execute("""
         CREATE TABLE IF NOT EXISTS email_campaigns (
-            id              TEXT PRIMARY KEY,
-            name            TEXT NOT NULL,
-            template_id     TEXT NOT NULL,
-            template_name   TEXT,
-            subject         TEXT,
-            attachment_path TEXT,
-            attachment_name TEXT,
-            status          TEXT DEFAULT 'pending',
-            total           INTEGER DEFAULT 0,
-            sent            INTEGER DEFAULT 0,
-            failed_count    INTEGER DEFAULT 0,
-            audience_filter TEXT DEFAULT '{}',
-            created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            finished_at     TIMESTAMP
+            id                      TEXT PRIMARY KEY,
+            name                    TEXT NOT NULL,
+            template_id             TEXT NOT NULL,
+            template_name           TEXT,
+            subject                 TEXT,
+            attachment_path         TEXT,
+            attachment_name         TEXT,
+            status                  TEXT DEFAULT 'pending',
+            total                   INTEGER DEFAULT 0,
+            sent                    INTEGER DEFAULT 0,
+            failed_count            INTEGER DEFAULT 0,
+            audience_filter         TEXT DEFAULT '{}',
+            campaign_type           TEXT DEFAULT 'one_shot',
+            start_date              TIMESTAMP,
+            reminder_email          TEXT,
+            reminder_hours_before   INTEGER DEFAULT 24,
+            created_at              TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at              TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            finished_at             TIMESTAMP
         )
     """)
 
@@ -69,6 +74,22 @@ def init_email_tables() -> None:
             cur.execute(f"ALTER TABLE {table} ADD COLUMN attachment_path TEXT")
         if "attachment_name" not in cols:
             cur.execute(f"ALTER TABLE {table} ADD COLUMN attachment_name TEXT")
+
+    # CC migration for email_templates
+    tpl_cols = [col[1] for col in cur.execute("PRAGMA table_info(email_templates)").fetchall()]
+    if "cc" not in tpl_cols:
+        cur.execute("ALTER TABLE email_templates ADD COLUMN cc TEXT DEFAULT ''")
+
+    # Sequence-related column migrations for email_campaigns
+    camp_cols = [col[1] for col in cur.execute("PRAGMA table_info(email_campaigns)").fetchall()]
+    for col_def in [
+        ("campaign_type", "TEXT DEFAULT 'one_shot'"),
+        ("start_date", "TIMESTAMP"),
+        ("reminder_email", "TEXT"),
+        ("reminder_hours_before", "INTEGER DEFAULT 24"),
+    ]:
+        if col_def[0] not in camp_cols:
+            cur.execute(f"ALTER TABLE email_campaigns ADD COLUMN {col_def[0]} {col_def[1]}")
 
     # Per-recipient delivery logs
     cur.execute("""
@@ -104,6 +125,46 @@ def init_email_tables() -> None:
         cur.execute("ALTER TABLE email_audiences ADD COLUMN selected_recipients TEXT DEFAULT '[]'")
     except Exception:
         pass
+
+    # Campaign Sequence Steps (drip campaigns)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS campaign_sequences (
+            id              TEXT PRIMARY KEY,
+            campaign_id     TEXT NOT NULL,
+            step_number     INTEGER NOT NULL,
+            template_id     TEXT NOT NULL,
+            template_name   TEXT,
+            subject         TEXT,
+            days_after      INTEGER DEFAULT 0,
+            status          TEXT DEFAULT 'pending',
+            scheduled_at    TIMESTAMP,
+            fired_at        TIMESTAMP,
+            sent_count      INTEGER DEFAULT 0,
+            failed_count    INTEGER DEFAULT 0,
+            reminder_sent   INTEGER DEFAULT 0,
+            created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (campaign_id) REFERENCES email_campaigns(id) ON DELETE CASCADE
+        )
+    """)
+
+    # Per-step recipient tracking (stores exact audience for each step)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS campaign_sequence_recipients (
+            id              TEXT PRIMARY KEY,
+            sequence_id     TEXT NOT NULL,
+            campaign_id     TEXT NOT NULL,
+            recipient_name  TEXT,
+            recipient_email TEXT NOT NULL,
+            company_name    TEXT,
+            role            TEXT,
+            website         TEXT,
+            city            TEXT,
+            country         TEXT,
+            category        TEXT,
+            FOREIGN KEY (sequence_id) REFERENCES campaign_sequences(id) ON DELETE CASCADE
+        )
+    """)
 
     # 1-by-1 Individual Review & Send Queue Items
     cur.execute("""
@@ -479,3 +540,225 @@ def save_smtp_config(host: str, port: int, user: str, password: str,
 
 # Run init on import so tables exist immediately
 init_email_tables()
+
+
+# ─────────────────────────────────────────────────────────────
+# Sequence CRUD helpers
+# ─────────────────────────────────────────────────────────────
+
+def create_sequence_steps(campaign_id: str, steps: list, start_date: str) -> list:
+    """
+    Persist a list of sequence step dicts for a campaign.
+    Each step: {template_id, days_after, step_number (optional)}
+    Returns created step rows as dicts.
+    """
+    import datetime as _dt
+    conn = get_connection()
+    cur = conn.cursor()
+
+    # Delete existing steps first (idempotent replace)
+    cur.execute("DELETE FROM campaign_sequences WHERE campaign_id = ?", (campaign_id,))
+    cur.execute("DELETE FROM campaign_sequence_recipients WHERE campaign_id = ?", (campaign_id,))
+
+    created = []
+    for i, step in enumerate(steps):
+        step_id = str(uuid.uuid4())
+        tpl = cur.execute(
+            "SELECT * FROM email_templates WHERE id = ?", (step["template_id"],)
+        ).fetchone()
+        tpl_name = tpl["name"] if tpl else ""
+        subject  = tpl["subject"] if tpl else ""
+
+        days_after = int(step.get("days_after", 0))
+        try:
+            base = _dt.datetime.fromisoformat(start_date.replace("Z", "+00:00"))
+        except Exception:
+            base = _dt.datetime.utcnow()
+        scheduled_at = (base + _dt.timedelta(days=days_after)).isoformat()
+
+        cur.execute("""
+            INSERT INTO campaign_sequences
+                (id, campaign_id, step_number, template_id, template_name, subject,
+                 days_after, status, scheduled_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+        """, (
+            step_id, campaign_id, i + 1,
+            step["template_id"], tpl_name, subject,
+            days_after, scheduled_at,
+        ))
+        created.append({
+            "id": step_id,
+            "campaign_id": campaign_id,
+            "step_number": i + 1,
+            "template_id": step["template_id"],
+            "template_name": tpl_name,
+            "subject": subject,
+            "days_after": days_after,
+            "status": "pending",
+            "scheduled_at": scheduled_at,
+        })
+
+    conn.commit()
+    conn.close()
+    return created
+
+
+def list_sequence_steps(campaign_id: str) -> list:
+    """Return all sequence steps for a campaign ordered by step_number."""
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT * FROM campaign_sequences WHERE campaign_id = ? ORDER BY step_number",
+        (campaign_id,)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_sequence_step(step_id: str) -> Optional[dict]:
+    """Return a single sequence step by ID."""
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT * FROM campaign_sequences WHERE id = ?", (step_id,)
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def update_sequence_step(step_id: str, **fields) -> Optional[dict]:
+    """Update arbitrary fields on a sequence step."""
+    if not fields:
+        return get_sequence_step(step_id)
+    set_clauses = ", ".join(f"{k} = ?" for k in fields)
+    values = list(fields.values()) + [step_id]
+    conn = get_connection()
+    conn.execute(
+        f"UPDATE campaign_sequences SET {set_clauses}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        values,
+    )
+    conn.commit()
+    row = conn.execute("SELECT * FROM campaign_sequences WHERE id = ?", (step_id,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def store_sequence_recipients(sequence_id: str, campaign_id: str, recipients: list) -> None:
+    """Persist the exact list of recipients for a sequence step."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM campaign_sequence_recipients WHERE sequence_id = ?", (sequence_id,))
+    for r in recipients:
+        cur.execute("""
+            INSERT INTO campaign_sequence_recipients
+                (id, sequence_id, campaign_id, recipient_name, recipient_email,
+                 company_name, role, website, city, country, category)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            str(uuid.uuid4()), sequence_id, campaign_id,
+            r.get("person_name") or r.get("recipient_name") or "",
+            r.get("email") or r.get("recipient_email") or "",
+            r.get("company_name") or "",
+            r.get("role") or "",
+            r.get("website") or "",
+            r.get("city") or "",
+            r.get("country") or "",
+            r.get("category") or "",
+        ))
+    conn.commit()
+    conn.close()
+
+
+def load_sequence_recipients(sequence_id: str) -> list:
+    """Load stored recipients for a given sequence step."""
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT * FROM campaign_sequence_recipients WHERE sequence_id = ?",
+        (sequence_id,)
+    ).fetchall()
+    conn.close()
+    return [
+        {
+            "person_name": r["recipient_name"],
+            "email": r["recipient_email"],
+            "company_name": r["company_name"],
+            "role": r["role"],
+            "website": r["website"],
+            "city": r["city"],
+            "country": r["country"],
+            "category": r["category"],
+        }
+        for r in rows
+    ]
+
+
+def get_due_sequence_steps() -> list:
+    """
+    Return all pending sequence steps whose scheduled_at is <= now.
+    Used by the scheduler to fire steps.
+    """
+    import datetime as _dt
+    now = _dt.datetime.utcnow().isoformat()
+    conn = get_connection()
+    rows = conn.execute(
+        """
+        SELECT cs.*, ec.audience_filter, ec.smtp_account_id, ec.reminder_email,
+               ec.reminder_hours_before
+        FROM campaign_sequences cs
+        JOIN email_campaigns ec ON ec.id = cs.campaign_id
+        WHERE cs.status = 'pending'
+          AND cs.scheduled_at <= ?
+        ORDER BY cs.scheduled_at
+        """,
+        (now,)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_upcoming_steps_needing_reminder() -> list:
+    """
+    Return pending steps whose reminder should be sent.
+    Reminder fires at exactly 4pm (16:00 UTC) on the day BEFORE the step's scheduled_at.
+    Only returned when reminder_email is configured and reminder_sent = 0.
+    """
+    import datetime as _dt
+    now = _dt.datetime.utcnow()
+    conn = get_connection()
+    rows = conn.execute(
+        """
+        SELECT cs.*, ec.name AS campaign_name, ec.reminder_email,
+               ec.reminder_hours_before, ec.smtp_account_id
+        FROM campaign_sequences cs
+        JOIN email_campaigns ec ON ec.id = cs.campaign_id
+        WHERE cs.status = 'pending'
+          AND ec.reminder_email IS NOT NULL
+          AND ec.reminder_email != ''
+          AND cs.reminder_sent = 0
+        """
+    ).fetchall()
+    conn.close()
+
+    due = []
+    for r in rows:
+        r = dict(r)
+        try:
+            scheduled = _dt.datetime.fromisoformat(
+                r["scheduled_at"].replace("Z", "+00:00")
+            ).replace(tzinfo=None)
+
+            # Reminder fires at 4pm UTC the day before the step
+            reminder_day = (scheduled - _dt.timedelta(days=1)).date()
+            reminder_fire_at = _dt.datetime(
+                reminder_day.year, reminder_day.month, reminder_day.day,
+                16, 0, 0   # 4:00 PM UTC
+            )
+
+            # Skip if step fires today or already passed the reminder window
+            # (e.g. day-0 step — no reminder needed)
+            if scheduled.date() <= now.date():
+                continue
+
+            if now >= reminder_fire_at:
+                due.append(r)
+        except Exception:
+            pass
+    return due

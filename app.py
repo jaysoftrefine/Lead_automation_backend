@@ -16,6 +16,7 @@ from core.logging import logger
 from db.sqlite import sqlite_manager
 from eu_startups.db import create_database as create_eu_database
 from email_campaigns.db import init_email_tables
+from email_campaigns.scheduler import start_scheduler, stop_scheduler
 
 # Base directory
 BASE_DIR = Path(__file__).resolve().parent
@@ -82,6 +83,10 @@ async def startup_event():
             f"✅ Database startup check PASSED! Path: {health['db_path']}, "
             f"Tables ({health['table_count']}): {list(health['tables'].keys())}"
         )
+
+        # 5. Start the email sequence scheduler
+        start_scheduler()
+        logger.info("✅ Sequence scheduler started.")
     except Exception as e:
         logger.critical(f"❌ DATABASE STARTUP CHECK FAILED: {e}", exc_info=True)
         raise RuntimeError(f"Database startup check failed: {e}") from e
@@ -89,12 +94,13 @@ async def startup_event():
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    """Clean up SQLite connection on shutdown."""
+    """Clean up SQLite connection and scheduler on shutdown."""
+    stop_scheduler()
     sqlite_manager.close()
     logger.info("FastAPI Web Server shut down.")
 
 
-@app.get("/api/health")
+@app.get("/health")
 async def health_check():
     """Health check endpoint verifying database readiness and tables."""
     try:
