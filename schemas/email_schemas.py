@@ -131,7 +131,7 @@ class AudienceCreate(BaseModel):
     """Payload to create a saved audience filter/segment."""
     name: str
     description: Optional[str] = ""
-    sources: List[str] = ["sqlite"]
+    sources: List[str] = []
     filters: Dict[str, Any] = {}
     manual_recipients: Optional[List[Any]] = None
     selected_recipients: Optional[List[Dict[str, Any]]] = None

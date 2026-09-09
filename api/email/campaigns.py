@@ -461,10 +461,18 @@ def preview_campaign_generated(body: CampaignPreviewGeneratedRequest) -> Dict[st
     cfg = get_smtp_config()
     sender_name = cfg.get("from_name", "Stephan Arnas")
 
+    eu_conn = None
+    try:
+        from eu_startups.db import get_connection as get_eu_connection
+        eu_conn = get_eu_connection()
+    except Exception:
+        pass
+
     items = []
-    for r in recipients:
-        r = _enrich_recipient_company_info(r, conn)
-        ctx = build_context(
+    try:
+        for r in recipients:
+            r = _enrich_recipient_company_info(r, conn=conn, eu_conn=eu_conn)
+            ctx = build_context(
             person_name=r.get("person_name"),
             role=r.get("role"),
             company_name=r.get("company_name"),
@@ -498,6 +506,12 @@ def preview_campaign_generated(body: CampaignPreviewGeneratedRequest) -> Dict[st
             "raw_body": rendered_body,
             "context": ctx,
         })
+    finally:
+        if eu_conn:
+            try:
+                eu_conn.close()
+            except Exception:
+                pass
 
     conn.close()
 

@@ -339,23 +339,25 @@ def collect_recipients(
                 if limit and len(recipients) >= limit:
                     return recipients
 
-    if "sqlite" in audience_sources:
-        for r in _get_recipients_from_sqlite(audience_filters):
-            e = (r.get("email") or "").lower().strip()
-            if e and e not in seen_emails:
-                seen_emails.add(e)
-                recipients.append(r)
-                if limit and len(recipients) >= limit:
-                    return recipients
+    # Only pull entire database leads if no specific handpicked recipients were chosen
+    if not selected_recipients:
+        if "sqlite" in audience_sources:
+            for r in _get_recipients_from_sqlite(audience_filters):
+                e = (r.get("email") or "").lower().strip()
+                if e and e not in seen_emails:
+                    seen_emails.add(e)
+                    recipients.append(r)
+                    if limit and len(recipients) >= limit:
+                        return recipients
 
-    if "mongo" in audience_sources or "job_leads" in audience_sources:
-        for r in _get_recipients_from_mongo(audience_filters):
-            e = (r.get("email") or "").lower().strip()
-            if e and e not in seen_emails:
-                seen_emails.add(e)
-                recipients.append(r)
-                if limit and len(recipients) >= limit:
-                    return recipients
+        if "mongo" in audience_sources or "job_leads" in audience_sources:
+            for r in _get_recipients_from_mongo(audience_filters):
+                e = (r.get("email") or "").lower().strip()
+                if e and e not in seen_emails:
+                    seen_emails.add(e)
+                    recipients.append(r)
+                    if limit and len(recipients) >= limit:
+                        return recipients
 
     return recipients
 
@@ -413,25 +415,27 @@ def count_recipients(
                 seen_emails.add(e)
                 count += 1
 
-    if "sqlite" in audience_sources:
-        for r in _get_recipients_from_sqlite(audience_filters):
-            e = (r.get("email") or "").lower().strip()
-            if e and e not in seen_emails:
-                seen_emails.add(e)
-                count += 1
-
-    if "mongo" in audience_sources or "job_leads" in audience_sources:
-        for r in _get_recipients_from_mongo(audience_filters):
-            e = (r.get("email") or "").lower().strip()
-            if e and e not in seen_emails:
-                seen_emails.add(e)
-                count += 1
-
     if "manual" in audience_sources and manual_emails:
         for e in manual_emails:
             e = e.strip().lower()
             if e and "@" in e and e not in seen_emails:
                 seen_emails.add(e)
                 count += 1
+
+    # Only count entire database leads if no specific handpicked recipients were chosen
+    if not selected_recipients:
+        if "sqlite" in audience_sources:
+            for r in _get_recipients_from_sqlite(audience_filters):
+                e = (r.get("email") or "").lower().strip()
+                if e and e not in seen_emails:
+                    seen_emails.add(e)
+                    count += 1
+
+        if "mongo" in audience_sources or "job_leads" in audience_sources:
+            for r in _get_recipients_from_mongo(audience_filters):
+                e = (r.get("email") or "").lower().strip()
+                if e and e not in seen_emails:
+                    seen_emails.add(e)
+                    count += 1
 
     return count

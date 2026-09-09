@@ -21,7 +21,7 @@ from email_campaigns.template_engine import (
 )
 from email_campaigns.campaign_runner import collect_recipients
 from email_campaigns.ai_personalizer import generate_ai_hook_and_pitch
-from api.email.shared import _enrich_recipient_company_info
+from api.email.shared import _enrich_recipient_company_info, get_startup_info
 
 router = APIRouter()
 
@@ -69,10 +69,18 @@ def generate_review_queue(body: QueueGenerateRequest) -> Dict[str, Any]:
     cfg = get_smtp_config(body.smtp_account_id)
     sender_name = cfg.get("from_name", "HirePilot AI")
 
+    eu_conn = None
+    try:
+        from eu_startups.db import get_connection as get_eu_connection
+        eu_conn = get_eu_connection()
+    except Exception:
+        pass
+
     created_items = []
-    for r in recipients:
-        r = _enrich_recipient_company_info(r, conn)
-        item_id = str(uuid.uuid4())
+    try:
+        for r in recipients:
+            r = _enrich_recipient_company_info(r, conn=conn, eu_conn=eu_conn)
+            item_id = str(uuid.uuid4())
         ctx = build_context(
             person_name=r.get("person_name"),
             role=r.get("role"),
@@ -126,6 +134,12 @@ def generate_review_queue(body: QueueGenerateRequest) -> Dict[str, Any]:
             "status": "draft",
             "smtp_account_id": body.smtp_account_id,
         })
+    finally:
+        if eu_conn:
+            try:
+                eu_conn.close()
+            except Exception:
+                pass
 
     conn.commit()
     conn.close()
@@ -316,17 +330,14 @@ def regenerate_queue_item_ai(item_id: str) -> Dict[str, Any]:
     category = item.get("category")
 
     if c_name:
-        s_row = conn.execute(
-            "SELECT description, tags, website, category FROM startups WHERE LOWER(TRIM(company_name)) = LOWER(TRIM(?)) LIMIT 1",
-            (c_name.strip(),)
-        ).fetchone()
-        if s_row:
-            desc = s_row["description"]
-            tags = s_row["tags"]
-            if not website and s_row["website"]:
-                website = s_row["website"]
-            if not category and s_row["category"]:
-                category = s_row["category"]
+        s_info = get_startup_info(c_name)
+        if s_info:
+            desc = s_info.get("description")
+            tags = s_info.get("tags")
+            if not website and s_info.get("website"):
+                website = s_info["website"]
+            if not category and s_info.get("category"):
+                category = s_info["category"]
 
     ai_data = generate_ai_hook_and_pitch(
         company_name=c_name,

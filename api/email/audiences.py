@@ -177,7 +177,7 @@ def list_audiences() -> Dict[str, Any]:
 def create_audience(payload: AudienceCreate) -> Dict[str, Any]:
     """Create a new saved audience."""
     aud_id = str(uuid.uuid4())
-    sources = payload.sources or ["sqlite"]
+    sources = payload.sources if payload.sources is not None else []
     filters = payload.filters or {}
     manual = payload.manual_recipients or []
     selected = payload.selected_recipients or []
