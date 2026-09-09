@@ -19,31 +19,52 @@ from typing import Dict, Optional
 
 
 AVAILABLE_VARIABLES = [
-    ("{{name}}",                "Recipient's name"),
-    ("{{company_name}}",        "Company name"),
-    ("{{ai_company_hook}}",     "AI personalized company observation"),
-    ("{{ai_value_pitch}}",      "AI tailored support / value proposition"),
-    ("{{role}}",                "Founder / Contact role"),
-    ("{{company_website}}",     "Company website"),
-    ("{{category}}",            "Industry / Category"),
-    ("{{city}}",                "Company city"),
-    ("{{country}}",             "Company country"),
+    ("{{name}}",                     "Recipient's name"),
+    ("{{company_name}}",             "Company name"),
+    ("{{job_requirement}}",          "Job / Project requirement"),
+    ("{{ai_company_hook_temp1}}",     "Template 1: AI personalized company observation"),
+    ("{{ai_value_pitch_temp1}}",      "Template 1: AI tailored value proposition"),
+    ("{{ai_company_hook_temp2}}",     "Template 2: AI follow-up / reminder hook"),
+    ("{{ai_value_pitch_temp2}}",      "Template 2: AI follow-up value proposition"),
+    ("{{role}}",                     "Founder / Contact role"),
+    ("{{company_website}}",          "Company website"),
+    ("{{category}}",                 "Industry / Category"),
+    ("{{city}}",                     "Company city"),
+    ("{{country}}",                  "Company country"),
 ]
 
 
 def resolve_variables(subject: str, body: str, context: Dict[str, str]) -> tuple[str, str]:
-    """Replace all {{variable}} placeholders with context values."""
+    """Replace all {{variable}} and bracket placeholders with context values."""
     for key, value in context.items():
         placeholder = f"{{{{{key}}}}}"
         safe_val = str(value or "").strip()
         subject = subject.replace(placeholder, safe_val)
         body = body.replace(placeholder, safe_val)
+
+    # Support bracket syntax from direct user templates like [First Name] and [Job Requirement]
+    name_val = context.get("first_name") or context.get("name") or "there"
+    job_val = context.get("job_requirement") or context.get("role") or "your technical requirements"
+    comp_val = context.get("company_name") or "your company"
+
+    for pattern, val in [
+        ("[First Name]", name_val),
+        ("[first name]", name_val),
+        ("[Name]", name_val),
+        ("[Job Requirement]", job_val),
+        ("[job requirement]", job_val),
+        ("[Company Name]", comp_val),
+    ]:
+        subject = subject.replace(pattern, val)
+        body = body.replace(pattern, val)
+
     return subject, body
 
 
 def build_context(
     person_name: Optional[str] = None,
     role: Optional[str] = None,
+    job_requirement: Optional[str] = None,
     company_name: Optional[str] = None,
     website: Optional[str] = None,
     city: Optional[str] = None,
@@ -53,6 +74,10 @@ def build_context(
     email: Optional[str] = None,
     company_description: Optional[str] = None,
     company_tags: Optional[str] = None,
+    ai_company_hook_temp1: Optional[str] = None,
+    ai_value_pitch_temp1: Optional[str] = None,
+    ai_company_hook_temp2: Optional[str] = None,
+    ai_value_pitch_temp2: Optional[str] = None,
     ai_company_hook: Optional[str] = None,
     ai_value_pitch: Optional[str] = None,
     use_ai: bool = True,
@@ -66,11 +91,13 @@ def build_context(
     best_name = first_name or person_name or "there"
     c_name = company_name or "your company"
 
-    hook = ai_company_hook
-    pitch = ai_value_pitch
+    hook_1 = ai_company_hook_temp1 or ai_company_hook
+    pitch_1 = ai_value_pitch_temp1 or ai_value_pitch
+    hook_2 = ai_company_hook_temp2
+    pitch_2 = ai_value_pitch_temp2
 
-    # If AI hook or pitch not provided, generate with Gemini
-    if use_ai and company_name and (not hook or not pitch):
+    # If AI hooks/pitches not fully provided, generate with Gemini
+    if use_ai and company_name and (not hook_1 or not pitch_1 or not hook_2 or not pitch_2):
         try:
             from email_campaigns.ai_personalizer import generate_ai_hook_and_pitch
             ai_data = generate_ai_hook_and_pitch(
@@ -82,57 +109,110 @@ def build_context(
                 tags=company_tags,
                 category=category,
             )
-            hook = hook or ai_data.get("ai_company_hook")
-            pitch = pitch or ai_data.get("ai_value_pitch")
+            hook_1 = hook_1 or ai_data.get("ai_company_hook_temp1") or ai_data.get("ai_company_hook")
+            pitch_1 = pitch_1 or ai_data.get("ai_value_pitch_temp1") or ai_data.get("ai_value_pitch")
+            hook_2 = hook_2 or ai_data.get("ai_company_hook_temp2")
+            pitch_2 = pitch_2 or ai_data.get("ai_value_pitch_temp2")
         except Exception:
             pass
 
-    default_hook = (
+    default_hook_1 = (
         f"I recently came across {c_name} and really liked how you're driving innovation in your product ecosystem. "
         f"I'd love to explore how we could support {c_name} with AI automation, intelligent workflows, and scalable product engineering."
         if company_name else
         "I recently came across your company and was really impressed by your innovation and product vision. I'd love to explore how we could support your team with AI automation, intelligent workflows, and scalable product engineering."
     )
 
-    default_pitch = (
+    default_pitch_1 = (
         f"We can support areas such as AI-powered workflow automation, intelligent data pipelines, RAG and knowledge systems, GenAI integrations, and scalable product engineering as {c_name} evolves."
         if company_name else
         "We can support areas such as AI-powered workflow automation, intelligent data pipelines, RAG and knowledge systems, GenAI integrations, and scalable product engineering as your product evolves."
     )
 
+    default_hook_2 = (
+        f"Following up on my previous note regarding {c_name}—I wanted to check if exploring AI automation, agentic workflows, or dedicated engineering support would be timely for your team."
+        if company_name else
+        "Following up on my previous note—I wanted to check if exploring AI automation, agentic workflows, or dedicated engineering support would be timely for your team."
+    )
+
+    default_pitch_2 = (
+        f"We'd love to share relevant case studies or explore how our 90+ engineers can support {c_name}'s technical roadmap."
+        if company_name else
+        "We'd love to share relevant case studies or explore how our 90+ engineers can support your technical roadmap."
+    )
+
+    final_hook_1 = hook_1 or default_hook_1
+    final_pitch_1 = pitch_1 or default_pitch_1
+    final_hook_2 = hook_2 or default_hook_2
+    final_pitch_2 = pitch_2 or default_pitch_2
+
     return {
-        "name":                best_name,
-        "first_name":          first_name or best_name,
-        "founder_name":        person_name or best_name,
-        "role":                role or "",
-        "company_name":        company_name or "",
-        "company_website":     website or "",
-        "city":                city or "",
-        "country":             country or "",
-        "category":            category or "",
-        "sender_name":         sender_name or "Stephan Arnas",
-        "email":               email or "",
-        "ai_company_hook":     hook or default_hook,
-        "ai_value_pitch":      pitch or default_pitch,
+        "name":                     best_name,
+        "first_name":               first_name or best_name,
+        "founder_name":             person_name or best_name,
+        "role":                     role or "",
+        "job_requirement":          job_requirement or role or "your technical requirements",
+        "company_name":             company_name or "",
+        "company_website":          website or "",
+        "city":                     city or "",
+        "country":                  country or "",
+        "category":                 category or "",
+        "sender_name":              sender_name or "Stephan Arnas",
+        "email":                    email or "",
+        "ai_company_hook_temp1":    final_hook_1,
+        "ai_value_pitch_temp1":     final_pitch_1,
+        "ai_company_hook_temp2":    final_hook_2,
+        "ai_value_pitch_temp2":     final_pitch_2,
+        "temp1_ai_company_hook":    final_hook_1,
+        "temp1_ai_value_pitch":     final_pitch_1,
+        "temp2_ai_company_hook":    final_hook_2,
+        "temp2_ai_value_pitch":     final_pitch_2,
+        "ai_company_hook":          final_hook_1,
+        "ai_value_pitch":           final_pitch_1,
     }
 
 
 def get_sample_context(sender_name: str = "Stephan Arnas") -> Dict[str, str]:
     """Returns sample context for template preview rendering."""
+    sample_hook_1 = (
+        "I recently came across Poetry and really liked how you're bringing AI into talent acquisition workflows, "
+        "from talent intelligence and recruitment marketing to recruiter enablement. I'd love to explore how we could support "
+        "Poetry with AI automation, intelligent workflows, and scalable product engineering."
+    )
+    sample_pitch_1 = (
+        "We can support areas such as AI-powered workflow automation, talent intelligence, RAG and knowledge systems, "
+        "GenAI integrations, browser/ATS workflows, and scalable product engineering as Poetry evolves."
+    )
+    sample_hook_2 = (
+        "I really liked Poetry’s approach to combining AI with recruiter intelligence to streamline talent acquisition while maintaining human touch. "
+        "As the product evolves, I believe there could be a good opportunity for SoftRefine to support areas like AI engineering, workflow automation, real-time analytics, and scalable product development."
+    )
+    sample_pitch_2 = (
+        "As the product evolves, I believe there could be a good opportunity for SoftRefine to support areas like AI engineering, workflow automation, real-time analytics, and scalable product development."
+    )
     return {
-        "name":                "Adam",
-        "first_name":          "Adam",
-        "founder_name":        "Adam Smith",
-        "role":                "Founder & CEO",
-        "company_name":        "Poetry",
-        "company_website":     "https://poetry.hr",
-        "city":                "London",
-        "country":             "United Kingdom",
-        "category":            "HR Tech & AI",
-        "sender_name":         sender_name,
-        "email":               "adam@poetry.hr",
-        "ai_company_hook":     "I recently came across Poetry and really liked how you're bringing AI into talent acquisition workflows, from talent intelligence and recruitment marketing to recruiter enablement. I'd love to explore how we could support Poetry with AI automation, intelligent workflows, and scalable product engineering.",
-        "ai_value_pitch":      "We can support areas such as AI-powered workflow automation, talent intelligence, RAG and knowledge systems, GenAI integrations, browser/ATS workflows, and scalable product engineering as Poetry evolves.",
+        "name":                     "Adam",
+        "first_name":               "Adam",
+        "founder_name":             "Adam Smith",
+        "role":                     "Founder & CEO",
+        "job_requirement":          "Senior AI & Full Stack Engineer",
+        "company_name":             "Poetry",
+        "company_website":          "https://poetry.hr",
+        "city":                     "London",
+        "country":                  "United Kingdom",
+        "category":                 "HR Tech & AI",
+        "sender_name":              sender_name,
+        "email":                    "adam@poetry.hr",
+        "ai_company_hook_temp1":    sample_hook_1,
+        "ai_value_pitch_temp1":     sample_pitch_1,
+        "ai_company_hook_temp2":    sample_hook_2,
+        "ai_value_pitch_temp2":     sample_pitch_2,
+        "temp1_ai_company_hook":    sample_hook_1,
+        "temp1_ai_value_pitch":     sample_pitch_1,
+        "temp2_ai_company_hook":    sample_hook_2,
+        "temp2_ai_value_pitch":     sample_pitch_2,
+        "ai_company_hook":          sample_hook_1,
+        "ai_value_pitch":           sample_pitch_1,
     }
 
 

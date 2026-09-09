@@ -361,8 +361,12 @@ def regenerate_queue_item_ai(item_id: str) -> Dict[str, Any]:
         email=item.get("recipient_email"),
         company_description=desc,
         company_tags=tags,
-        ai_company_hook=ai_data["ai_company_hook"],
-        ai_value_pitch=ai_data["ai_value_pitch"],
+        ai_company_hook_temp1=ai_data.get("ai_company_hook_temp1"),
+        ai_value_pitch_temp1=ai_data.get("ai_value_pitch_temp1"),
+        ai_company_hook_temp2=ai_data.get("ai_company_hook_temp2"),
+        ai_value_pitch_temp2=ai_data.get("ai_value_pitch_temp2"),
+        ai_company_hook=ai_data.get("ai_company_hook"),
+        ai_value_pitch=ai_data.get("ai_value_pitch"),
         use_ai=False,
     )
 
@@ -387,8 +391,12 @@ def regenerate_queue_item_ai(item_id: str) -> Dict[str, Any]:
         "status": "success",
         "message": f"Successfully regenerated personalized AI email for {c_name or item.get('recipient_name')}.",
         "data": dict(updated),
-        "ai_hook": ai_data["ai_company_hook"],
-        "ai_pitch": ai_data["ai_value_pitch"],
+        "ai_hook": ai_data.get("ai_company_hook_temp1") or ai_data.get("ai_company_hook"),
+        "ai_pitch": ai_data.get("ai_value_pitch_temp1") or ai_data.get("ai_value_pitch"),
+        "ai_hook_temp1": ai_data.get("ai_company_hook_temp1"),
+        "ai_pitch_temp1": ai_data.get("ai_value_pitch_temp1"),
+        "ai_hook_temp2": ai_data.get("ai_company_hook_temp2"),
+        "ai_pitch_temp2": ai_data.get("ai_value_pitch_temp2"),
     }
 
 
