@@ -4,7 +4,7 @@ import time
 from datetime import datetime
 
 from config.settings import settings
-from core.company_filter import detect_job_type_filter, is_matching_company_size
+from core.company_filter import classify_company_size, detect_job_type_filter, is_matching_company_size
 from core.logging import logger
 from db.sqlite import sqlite_manager
 from enrichment.agent import LeadEnrichmentAgent
@@ -16,7 +16,13 @@ from api.pipeline.state import pipeline_state
 def execute_pipeline_task(req: RunPipelineRequest):
     sites = req.sites or req.platforms or ["linkedin"]
     target_goal = req.limit or req.results_wanted or 10
-    target_size = req.company_size or "small"
+    raw_size = (req.company_size or "small").strip()
+    if raw_size.lower() in ("all", "any"):
+        target_size = "all"
+    else:
+        canonical_size = classify_company_size(raw_size)
+        target_size = canonical_size if canonical_size != "unknown" else "small"
+
     detected_job_type, effective_search_term = detect_job_type_filter(req.search_term, explicit_job_type=req.job_type)
 
     remote_tag = " [REMOTE ONLY]" if req.is_remote else ""
@@ -203,17 +209,6 @@ def execute_pipeline_task(req: RunPipelineRequest):
                             "warning"
                         )
                         metrics.rejected_by_llm += 1
-                        if scheduled_id:
-                            enriched_lead.scheduled_job_id = scheduled_id
-                        sqlite_manager.upsert_enriched_lead(enriched_lead)
-                        continue
-
-                    if enriched_lead.relevance_score < req.min_score:
-                        pipeline_state.add_log(
-                            f"❌ REJECTED (Low Score): '{job.company}' scored {enriched_lead.relevance_score}/100 < required {req.min_score}",
-                            "warning"
-                        )
-                        metrics.rejected_by_llm += 1
                         continue
 
                     if target_size != "all" and not is_matching_company_size(enriched_lead.company_size, target_filter=target_size):
@@ -222,6 +217,14 @@ def execute_pipeline_task(req: RunPipelineRequest):
                             "warning"
                         )
                         metrics.rejected_by_size += 1
+                        metrics.rejected_by_llm += 1
+                        continue
+
+                    if enriched_lead.relevance_score < req.min_score:
+                        pipeline_state.add_log(
+                            f"❌ REJECTED (Low Score): '{job.company}' scored {enriched_lead.relevance_score}/100 < required {req.min_score}",
+                            "warning"
+                        )
                         metrics.rejected_by_llm += 1
                         continue
 

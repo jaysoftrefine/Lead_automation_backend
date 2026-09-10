@@ -78,7 +78,12 @@ class LeadGenOrchestrator:
         Execute the end-to-end lead generation pipeline with granular progress logging.
         """
         target_sites = sites or ["linkedin", "naukri"]
-        target_size = company_size or "small"
+        raw_size = (company_size or "small").strip()
+        if raw_size.lower() in ("all", "any"):
+            target_size = "all"
+        else:
+            canonical_size = classify_company_size(raw_size)
+            target_size = canonical_size if canonical_size != "unknown" else "small"
         
         # Detect or apply explicit job type (e.g. freelance / contract)
         detected_job_type, effective_search_term = detect_job_type_filter(search_term, explicit_job_type=job_type)
@@ -108,28 +113,21 @@ class LeadGenOrchestrator:
         # 2. Scrape jobs
         raw_postings: List[RawJobPosting] = []
         try:
-            logger.info(f"📡 [Phase 1/2] Fetching job listings across {', '.join(target_sites)} (Job Type: {detected_job_type or 'All'})...")
-            raw_postings = self.scraper.scrape(
+            logger.info(f"📡 [Phase 1/2] Scraping jobs from {', '.join(target_sites)}...")
+            raw_postings = self.scraper.scrape_all(
                 search_term=effective_search_term,
                 location=location,
                 results_wanted=results_limit,
                 hours_old=hours_old,
-                sites=target_sites,
                 job_type=detected_job_type,
             )
             metrics.total_scraped = len(raw_postings)
+            logger.info(f"✅ Scraping completed: {len(raw_postings)} candidate postings found.")
             
             # Extract unique companies
             unique_comps = sorted(list({p.company.strip() for p in raw_postings if p.company and p.company.strip()}))
             metrics.unique_companies_count = len(unique_comps)
             metrics.unique_companies = unique_comps
-
-            logger.info("=" * 70)
-            logger.info(f"📥 SCRAPE COMPLETE: Fetched {metrics.total_scraped} job postings across {metrics.unique_companies_count} unique companies.")
-            if unique_comps:
-                sample_companies = ", ".join(unique_comps[:8]) + ("..." if len(unique_comps) > 8 else "")
-                logger.info(f"🏢 Companies discovered: {sample_companies}")
-            logger.info("=" * 70)
 
         except Exception as scrape_err:
             logger.error(f"❌ Scraping stage encountered error: {scrape_err}")
@@ -175,14 +173,6 @@ class LeadGenOrchestrator:
                         f"❌ REJECTED [Invalid Lead]: '{job.company}' - {enriched_lead.lead_summary}"
                     )
                     metrics.rejected_by_llm += 1
-                    self.db.upsert_enriched_lead(enriched_lead)
-                    continue
-
-                if enriched_lead.relevance_score < self.min_relevance_score:
-                    logger.warning(
-                        f"❌ REJECTED [Low Score]: '{job.company}' scored {enriched_lead.relevance_score}/100 (Below required {self.min_relevance_score})"
-                    )
-                    metrics.rejected_by_llm += 1
                     continue
 
                 # Company Size Validation (Strictly max 50 for small)
@@ -191,6 +181,13 @@ class LeadGenOrchestrator:
                         f"❌ REJECTED [Company Size Mismatch]: '{job.company}' ({enriched_lead.company_size or 'Unknown'}) does not match requested '{target_size}' size filter."
                     )
                     metrics.rejected_by_size += 1
+                    metrics.rejected_by_llm += 1
+                    continue
+
+                if enriched_lead.relevance_score < self.min_relevance_score:
+                    logger.warning(
+                        f"❌ REJECTED [Low Score]: '{job.company}' scored {enriched_lead.relevance_score}/100 (Below required {self.min_relevance_score})"
+                    )
                     metrics.rejected_by_llm += 1
                     continue
 

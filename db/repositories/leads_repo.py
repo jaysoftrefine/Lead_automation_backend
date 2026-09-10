@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, List, Optional
 import sqlite3
 
+from core.company_filter import classify_company_size
 from core.exceptions import DatabaseException
 from core.logging import logger
 from db.models import EnrichedLead
@@ -144,7 +145,7 @@ class LeadsRepository:
         conn = self.get_connection()
         try:
             cur = conn.cursor()
-            conditions = []
+            conditions = ["enriched_leads.is_valid_lead = 1"]
             params = []
 
             if scheduled_job_id and scheduled_job_id.lower() != "all":
@@ -218,23 +219,21 @@ class LeadsRepository:
                         conditions.append(f"({' OR '.join(sub)})")
                         params.extend(sub_p)
 
-            if company_size and company_size.lower() != "all":
-                c_size = company_size.lower().strip()
+            if company_size and company_size.lower() not in ("all", "any"):
+                c_category = classify_company_size(company_size)
+                c_size = c_category if c_category != "unknown" else company_size.lower().strip()
                 if c_size == "small":
                     conditions.append("""(
                         (
                             enriched_leads.company_size LIKE '%1-10%' OR
+                            enriched_leads.company_size LIKE '%2-10%' OR
                             enriched_leads.company_size LIKE '%11-50%' OR
                             enriched_leads.company_size LIKE '%1-50%' OR
                             enriched_leads.company_size LIKE '%1-20%' OR
                             LOWER(enriched_leads.company_size) LIKE '%startup%' OR
                             LOWER(enriched_leads.company_size) LIKE '%seed%' OR
                             LOWER(enriched_leads.company_size) LIKE '%micro%' OR
-                            LOWER(enriched_leads.company_size) LIKE '%boutique%' OR
-                            enriched_leads.company_size IS NULL OR
-                            enriched_leads.company_size = '' OR
-                            enriched_leads.company_size = 'Unspecified' OR
-                            enriched_leads.company_size = 'Unknown'
+                            LOWER(enriched_leads.company_size) LIKE '%boutique%'
                         ) AND NOT (
                             enriched_leads.company_size LIKE '%51-200%' OR
                             enriched_leads.company_size LIKE '%201-500%' OR

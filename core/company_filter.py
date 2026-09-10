@@ -34,7 +34,7 @@ def classify_company_size(size_str: Optional[str]) -> str:
         return "medium"
 
     # Small standard ranges (<= 50)
-    if re.search(r"\b(1\s*-\s*10|1\s*-\s*20|1\s*-\s*50|11\s*-\s*50|10\s*-\s*50|20\s*-\s*50|1\s*-\s*5)\b", raw):
+    if re.search(r"\b(1\s*-\s*10|2\s*-\s*10|1\s*-\s*20|1\s*-\s*50|11\s*-\s*50|10\s*-\s*50|20\s*-\s*50|1\s*-\s*5)\b", raw):
         return "small"
 
     # Keywords for small
@@ -68,30 +68,46 @@ def classify_company_size(size_str: Optional[str]) -> str:
     return "unknown"
 
 
-def is_matching_company_size(company_size: Optional[str], target_filter: str = "small") -> bool:
+def is_matching_company_size(
+    company_size: Optional[str],
+    target_filter: str = "small",
+    allow_unknown: bool = False,
+) -> bool:
     """
-    Checks if a company's size string matches the requested target filter.
+    Checks if a company's size string strictly matches the requested target filter.
     target_filter options:
-    - 'small': <= 50 employees (1-10, 11-50) (gives benefit of doubt to unknown/unspecified early stage startups)
-    - 'medium': 51-500 employees (51-200, 201-500)
-    - 'large': 500+ employees
+    - 'small' (or 'Small / Startup (1-50)', '1-50'): <= 50 employees (1-10, 2-10, 11-50)
+    - 'medium' (or '51-500'): 51-500 employees (51-200, 201-500)
+    - 'large' (or '500+'): 500+ employees
     - 'all': matches all sizes
     """
-    if not target_filter or target_filter.lower() in ("all", "any"):
+    if not target_filter or str(target_filter).lower().strip() in ("all", "any"):
         return True
 
-    filter_normalized = target_filter.lower().strip()
+    # Normalize target_filter to canonical 'small', 'medium', or 'large'
+    target_category = classify_company_size(str(target_filter))
+    if target_category == "unknown":
+        raw_filter = str(target_filter).lower().strip()
+        if any(k in raw_filter for k in ("small", "startup", "seed", "boutique", "1-50", "11-50", "1-10", "2-10", "50")):
+            target_category = "small"
+        elif any(k in raw_filter for k in ("medium", "mid", "51-200", "201-500", "500")):
+            target_category = "medium"
+        elif any(k in raw_filter for k in ("large", "enterprise", "corporate", "500+", "1000+")):
+            target_category = "large"
+        else:
+            return True
+
     classified = classify_company_size(company_size)
 
-    if filter_normalized == "small":
-        # Strictly matches small (<= 50) and unknown
-        return classified in ("small", "unknown")
+    if target_category == "small":
+        # Strictly matches small (<= 50)
+        return classified == "small" or (allow_unknown and classified == "unknown")
 
-    if filter_normalized == "medium":
-        return classified in ("medium", "unknown")
+    if target_category == "medium":
+        return classified == "medium" or (allow_unknown and classified == "unknown")
 
-    if filter_normalized == "large":
-        return classified in ("large",)
+    if target_category == "large":
+        return classified == "large"
 
     return True
 
