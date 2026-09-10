@@ -175,6 +175,7 @@ def send_test_email(body: TestEmailBody) -> Dict[str, Any]:
 
     attachment_path = body.attachment_path
     attachment_name = body.attachment_name
+    cc_target = body.cc
 
     if body.template_id:
         conn = get_connection()
@@ -186,6 +187,8 @@ def send_test_email(body: TestEmailBody) -> Dict[str, Any]:
         if not attachment_path and "attachment_path" in row.keys():
             attachment_path = row["attachment_path"]
             attachment_name = row["attachment_name"]
+        if cc_target is None and "cc" in row.keys() and row["cc"]:
+            cc_target = row["cc"]
     elif body.subject and body.body:
         subject, html_body = resolve_variables(body.subject, body.body, ctx)
     else:
@@ -194,11 +197,13 @@ def send_test_email(body: TestEmailBody) -> Dict[str, Any]:
     ok, err = send_email(
         body.to_email, subject, html_body, cfg,
         attachment_path=attachment_path,
-        attachment_name=attachment_name
+        attachment_name=attachment_name,
+        cc=cc_target,
     )
     if not ok:
         return {"status": "failed", "message": f"Failed to send: {err}"}
+    cc_msg = f" (CC: {cc_target})" if cc_target else ""
     return {
         "status": "success",
-        "message": f"Test email sent to {body.to_email} (from {cfg.get('smtp_user')}){' with attachment' if attachment_path else ''} ✓"
+        "message": f"Test email sent to {body.to_email}{cc_msg} (from {cfg.get('smtp_user')}){' with attachment' if attachment_path else ''} ✓"
     }

@@ -57,6 +57,7 @@ def init_email_tables() -> None:
             sent                    INTEGER DEFAULT 0,
             failed_count            INTEGER DEFAULT 0,
             audience_filter         TEXT DEFAULT '{}',
+            cc                      TEXT DEFAULT '',
             campaign_type           TEXT DEFAULT 'one_shot',
             start_date              TIMESTAMP,
             reminder_email          TEXT,
@@ -80,9 +81,10 @@ def init_email_tables() -> None:
     if "cc" not in tpl_cols:
         cur.execute("ALTER TABLE email_templates ADD COLUMN cc TEXT DEFAULT ''")
 
-    # Sequence-related column migrations for email_campaigns
+    # Sequence-related and CC column migrations for email_campaigns
     camp_cols = [col[1] for col in cur.execute("PRAGMA table_info(email_campaigns)").fetchall()]
     for col_def in [
+        ("cc", "TEXT DEFAULT ''"),
         ("campaign_type", "TEXT DEFAULT 'one_shot'"),
         ("start_date", "TIMESTAMP"),
         ("reminder_email", "TEXT"),
@@ -184,6 +186,7 @@ def init_email_tables() -> None:
             subject         TEXT NOT NULL,
             body            TEXT NOT NULL,
             raw_body        TEXT,
+            cc              TEXT DEFAULT '',
             status          TEXT DEFAULT 'draft',
             error_message   TEXT,
             sent_at         TIMESTAMP,
@@ -191,6 +194,11 @@ def init_email_tables() -> None:
             updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+
+    # Safe CC migration for email_queue_items
+    queue_cols = [col[1] for col in cur.execute("PRAGMA table_info(email_queue_items)").fetchall()]
+    if "cc" not in queue_cols:
+        cur.execute("ALTER TABLE email_queue_items ADD COLUMN cc TEXT DEFAULT ''")
 
     # Multi-SMTP Configuration Accounts
     cur.execute("""

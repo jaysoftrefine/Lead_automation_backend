@@ -80,6 +80,7 @@ class CampaignCreate(BaseModel):
     selected_recipients: Optional[List[Dict[str, Any]]] = None
     delay_seconds: float = 0.8
     draft: bool = False
+    cc: Optional[str] = None                            # optional comma-separated CC addresses
     # Sequence / drip fields
     campaign_type: str = "one_shot"                     # "one_shot" | "sequence"
     steps: Optional[List[SequenceStep]] = None          # drip steps (sequence campaigns)
@@ -98,6 +99,7 @@ class CampaignUpdate(BaseModel):
     selected_recipients: Optional[List[Dict[str, Any]]] = None
     delay_seconds: Optional[float] = None
     status: Optional[str] = None
+    cc: Optional[str] = None                            # optional comma-separated CC addresses
     # Sequence / drip fields
     steps: Optional[List[SequenceStep]] = None
     reminder_email: Optional[str] = None
@@ -111,6 +113,7 @@ class TestEmailBody(BaseModel):
     template_id: Optional[str] = None
     subject: Optional[str] = None
     body: Optional[str] = None
+    cc: Optional[str] = None                            # optional comma-separated CC addresses
     attachment_path: Optional[str] = None
     attachment_name: Optional[str] = None
 
@@ -156,6 +159,7 @@ class QueueGenerateRequest(BaseModel):
     audience_filters: Dict[str, Any] = {}
     manual_emails: Optional[List[str]] = None
     selected_recipients: Optional[List[Dict[str, Any]]] = None
+    cc: Optional[str] = None                            # optional comma-separated CC addresses
     limit: int = 50
 
 
@@ -167,8 +171,11 @@ class QueueItemUpdate(BaseModel):
     recipient_name: Optional[str] = None
     recipient_email: Optional[str] = None
     company_name: Optional[str] = None
+    cc: Optional[str] = None                            # optional comma-separated CC addresses
 
 
 class QueueSendRequest(BaseModel):
     """Payload to send an individual queue item with an explicit SMTP account."""
     smtp_account_id: Optional[str] = None
+    cc: Optional[str] = None                            # optional comma-separated CC addresses
+

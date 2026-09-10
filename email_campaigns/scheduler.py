@@ -117,6 +117,7 @@ def _fire_sequence_step(step: Dict[str, Any]) -> None:
         conn.close()
 
         # Launch email sending in a background thread
+        step_cc = (tpl.get("cc") if "cc" in tpl.keys() else "") or ""
         t = threading.Thread(
             target=_send_step_and_update,
             args=(
@@ -127,6 +128,7 @@ def _fire_sequence_step(step: Dict[str, Any]) -> None:
                 smtp_account_id,
                 tpl.get("attachment_path"),
                 tpl.get("attachment_name"),
+                step_cc,
             ),
             daemon=True,
         )
@@ -146,6 +148,7 @@ def _send_step_and_update(
     smtp_account_id: Optional[str],
     attachment_path: Optional[str],
     attachment_name: Optional[str],
+    cc: Optional[str] = None,
 ) -> None:
     """Thread worker: sends emails for a step and updates step status when done."""
     from email_campaigns.db import update_sequence_step
@@ -161,6 +164,7 @@ def _send_step_and_update(
             attachment_path=attachment_path,
             attachment_name=attachment_name,
             smtp_account_id=smtp_account_id,
+            cc=cc,
         )
         update_sequence_step(
             step_id,

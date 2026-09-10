@@ -97,14 +97,15 @@ def generate_review_queue(body: QueueGenerateRequest) -> Dict[str, Any]:
         )
         rendered_subj, rendered_body = resolve_variables(tpl["subject"], tpl["body"], ctx)
         rendered_html = text_to_html_email(rendered_body)
+        queue_cc = (body.cc if body.cc is not None else (tpl.get("cc") if "cc" in tpl.keys() and tpl["cc"] else "")).strip()
 
         conn.execute(
             """
             INSERT INTO email_queue_items (
                 id, template_id, template_name, audience_id,
                 recipient_name, recipient_email, company_name, role, website, city, country, category,
-                subject, body, raw_body, status, smtp_account_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?)
+                subject, body, raw_body, cc, status, smtp_account_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?)
             """,
             (
                 item_id,
@@ -122,6 +123,7 @@ def generate_review_queue(body: QueueGenerateRequest) -> Dict[str, Any]:
                 rendered_subj,
                 rendered_html,
                 rendered_body,
+                queue_cc,
                 body.smtp_account_id,
             ),
         )
@@ -131,6 +133,7 @@ def generate_review_queue(body: QueueGenerateRequest) -> Dict[str, Any]:
             "recipient_email": r.get("email") or "",
             "company_name": r.get("company_name") or "",
             "subject": rendered_subj,
+            "cc": queue_cc,
             "status": "draft",
             "smtp_account_id": body.smtp_account_id,
         })
@@ -233,13 +236,15 @@ def update_queue_item(item_id: str, body: QueueItemUpdate) -> Dict[str, Any]:
         new_raw = body.body
         new_body = text_to_html_email(body.body)
 
+    new_cc = body.cc.strip() if body.cc is not None else current.get("cc", "")
+
     conn.execute(
         """
         UPDATE email_queue_items
-        SET subject = ?, body = ?, raw_body = ?, recipient_name = ?, recipient_email = ?, company_name = ?, smtp_account_id = ?, updated_at = CURRENT_TIMESTAMP
+        SET subject = ?, body = ?, raw_body = ?, recipient_name = ?, recipient_email = ?, company_name = ?, smtp_account_id = ?, cc = ?, updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
         """,
-        (new_subj, new_body, new_raw, new_name, new_email, new_company, new_smtp_id, item_id),
+        (new_subj, new_body, new_raw, new_name, new_email, new_company, new_smtp_id, new_cc, item_id),
     )
     conn.commit()
     conn.close()
@@ -277,6 +282,8 @@ def send_queue_item(
     cfg = get_smtp_config(target_smtp_id)
     sender_email = cfg.get("smtp_user", "")
 
+    cc_to_send = (body.cc if body and body.cc is not None else item.get("cc")) or ""
+
     success, err_msg = send_email(
         to_email=to_email,
         subject=item["subject"],
@@ -284,6 +291,7 @@ def send_queue_item(
         config=cfg,
         attachment_path=attachment_path,
         attachment_name=attachment_name,
+        cc=cc_to_send,
     )
 
     now_iso = datetime.now(timezone.utc).isoformat()
@@ -302,7 +310,8 @@ def send_queue_item(
         )
         conn.commit()
         conn.close()
-        return {"status": "success", "message": f"Email successfully sent to {to_email} (via {sender_email})!"}
+        cc_note = f" (CC: {cc_to_send})" if cc_to_send else ""
+        return {"status": "success", "message": f"Email successfully sent to {to_email}{cc_note} (via {sender_email})!"}
     else:
         conn.execute(
             "UPDATE email_queue_items SET status = 'failed', error_message = ?, smtp_account_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",

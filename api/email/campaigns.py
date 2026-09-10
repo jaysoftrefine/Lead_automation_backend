@@ -63,6 +63,7 @@ def create_campaign(body: CampaignCreate) -> Dict[str, Any]:
     cid = str(uuid.uuid4())
     attachment_path = tpl["attachment_path"] if "attachment_path" in tpl.keys() else None
     attachment_name = tpl["attachment_name"] if "attachment_name" in tpl.keys() else None
+    campaign_cc = (body.cc if body.cc is not None else (tpl.get("cc") or "")).strip()
 
     # Pack full configuration into audience_filter JSON
     config_payload = {
@@ -82,15 +83,16 @@ def create_campaign(body: CampaignCreate) -> Dict[str, Any]:
         conn.execute("""
             INSERT INTO email_campaigns
                 (id, name, template_id, template_name, subject, attachment_path, attachment_name,
-                 status, audience_filter, smtp_account_id,
+                 status, audience_filter, smtp_account_id, cc,
                  campaign_type, start_date, reminder_email, reminder_hours_before)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?)
         """, (
             cid, body.name.strip(), body.template_id,
             tpl["name"], tpl["subject"],
             attachment_path, attachment_name,
             json.dumps(config_payload),
             body.smtp_account_id,
+            campaign_cc,
             campaign_type, start_date,
             body.reminder_email or "",
             body.reminder_hours_before or 24,
@@ -128,15 +130,16 @@ def create_campaign(body: CampaignCreate) -> Dict[str, Any]:
     conn.execute("""
         INSERT INTO email_campaigns
             (id, name, template_id, template_name, subject, attachment_path, attachment_name,
-             status, audience_filter, smtp_account_id,
+             status, audience_filter, smtp_account_id, cc,
              campaign_type, start_date, reminder_email, reminder_hours_before)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?)
     """, (
         cid, body.name.strip(), body.template_id,
         tpl["name"], tpl["subject"],
         attachment_path, attachment_name,
         json.dumps(config_payload),
         body.smtp_account_id,
+        campaign_cc,
         campaign_type, start_date,
         body.reminder_email or "",
         body.reminder_hours_before or 24,
@@ -179,7 +182,7 @@ def create_campaign(body: CampaignCreate) -> Dict[str, Any]:
         attachment_path=attachment_path,
         attachment_name=attachment_name,
         smtp_account_id=body.smtp_account_id,
-        cc=tpl.get("cc") or "",
+        cc=campaign_cc,
     )
 
     return {
@@ -217,6 +220,9 @@ def update_campaign(campaign_id: str, body: CampaignUpdate) -> Dict[str, Any]:
 
     if body.smtp_account_id is not None:
         updates["smtp_account_id"] = body.smtp_account_id
+
+    if body.cc is not None:
+        updates["cc"] = body.cc.strip()
 
     if body.reminder_email is not None:
         updates["reminder_email"] = body.reminder_email
@@ -322,6 +328,7 @@ def launch_campaign_by_id(campaign_id: str) -> Dict[str, Any]:
 
     attachment_path = camp["attachment_path"] if "attachment_path" in camp.keys() else tpl.get("attachment_path")
     attachment_name = camp["attachment_name"] if "attachment_name" in camp.keys() else tpl.get("attachment_name")
+    cc = (camp_dict.get("cc") if "cc" in camp_dict else None) or tpl.get("cc") or ""
 
     conn.execute(
         "UPDATE email_campaigns SET status = 'queued', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
@@ -342,6 +349,7 @@ def launch_campaign_by_id(campaign_id: str) -> Dict[str, Any]:
         attachment_path=attachment_path,
         attachment_name=attachment_name,
         smtp_account_id=smtp_account_id,
+        cc=cc,
     )
 
     return {
