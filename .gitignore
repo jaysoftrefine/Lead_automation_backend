@@ -238,4 +238,4 @@ Icon
 
 # Local data & scraped fixtures
 data/
-
+test*
