@@ -53,6 +53,22 @@ class LeadsRepository:
 
             scheduled_job_id_val = getattr(lead, "scheduled_job_id", None)
 
+            scraped_day = (scraped_at_str or now_iso)[:10]
+            try:
+                from datetime import date as date_cls, timedelta
+                from config.settings import settings
+                delay = int(settings.outreach_first_send_delay_days)
+                mode = (settings.outreach_default_mode or "auto").strip().lower()
+                state = (settings.outreach_default_state or "open").strip().lower()
+                if mode not in ("auto", "manual"):
+                    mode = "auto"
+                if state not in ("open", "closed"):
+                    state = "open"
+                next_send_default = (date_cls.fromisoformat(scraped_day) + timedelta(days=delay)).isoformat()
+            except Exception:
+                mode, state = "auto", "open"
+                next_send_default = scraped_day
+
             cur.execute("""
                 INSERT INTO enriched_leads (
                     job_url, title, company, site, location, job_type, job_description,
@@ -60,8 +76,9 @@ class LeadsRepository:
                     company_size, contacts, key_technologies, hiring_urgency,
                     lead_summary, agent_thinking_process, search_queries_used,
                     status, lead_type, date_posted, scraped_at, created_at, updated_at,
-                    scheduled_job_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    scheduled_job_id,
+                    outreach_mode, outreach_state, outreach_stage, next_send_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
                 ON CONFLICT(job_url) DO UPDATE SET
                     title=excluded.title,
                     company=excluded.company,
@@ -112,6 +129,9 @@ class LeadsRepository:
                 created_at_iso,
                 now_iso,
                 scheduled_job_id_val,
+                mode,
+                state,
+                next_send_default,
                 now_iso,
             ))
             conn.commit()
@@ -407,6 +427,74 @@ class LeadsRepository:
             """, (lead_type, now_iso, job_url))
             conn.commit()
             return cur.rowcount > 0
+        finally:
+            conn.close()
+
+    def update_lead_outreach(
+        self,
+        job_url: str,
+        outreach_mode: Optional[str] = None,
+        outreach_state: Optional[str] = None,
+        outreach_stage: Optional[int] = None,
+        next_send_at: Optional[str] = None,
+        last_sent_at: Optional[str] = None,
+        clear_next_send_at: bool = False,
+    ) -> bool:
+        """Update per-lead outreach automation fields. Only provided fields are changed."""
+        conn = self.get_connection()
+        try:
+            cur = conn.cursor()
+            sets = ["updated_at = ?"]
+            params: List[Any] = [datetime.utcnow().isoformat()]
+            if outreach_mode is not None:
+                sets.append("outreach_mode = ?")
+                params.append(outreach_mode)
+            if outreach_state is not None:
+                sets.append("outreach_state = ?")
+                params.append(outreach_state)
+            if outreach_stage is not None:
+                sets.append("outreach_stage = ?")
+                params.append(int(outreach_stage))
+            if clear_next_send_at:
+                sets.append("next_send_at = NULL")
+            elif next_send_at is not None:
+                sets.append("next_send_at = ?")
+                params.append(next_send_at)
+            if last_sent_at is not None:
+                sets.append("last_sent_at = ?")
+                params.append(last_sent_at)
+            if len(sets) <= 1:
+                return False
+            params.append(job_url)
+            cur.execute(
+                f"UPDATE enriched_leads SET {', '.join(sets)} WHERE job_url = ?",
+                params,
+            )
+            conn.commit()
+            return cur.rowcount > 0
+        finally:
+            conn.close()
+
+    def get_due_outreach_leads(self, today_date_str: str) -> List[Dict[str, Any]]:
+        """Leads due for automated mail: auto + open + next_send_at <= today + company/personal."""
+        conn = self.get_connection()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT * FROM enriched_leads
+                WHERE is_valid_lead = 1
+                  AND COALESCE(LOWER(outreach_mode), 'manual') = 'auto'
+                  AND COALESCE(LOWER(outreach_state), 'open') = 'open'
+                  AND next_send_at IS NOT NULL
+                  AND substr(next_send_at, 1, 10) <= ?
+                  AND COALESCE(LOWER(lead_type), 'others') IN ('company', 'personal')
+                  AND contacts IS NOT NULL AND contacts != '[]' AND contacts != ''
+                ORDER BY next_send_at ASC
+                """,
+                (today_date_str,),
+            )
+            return [self._format_lead_row(r) for r in cur.fetchall()]
         finally:
             conn.close()
 

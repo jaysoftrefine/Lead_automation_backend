@@ -51,6 +51,24 @@ class UpdateLeadTypeRequest(BaseModel):
     lead_type: str = Field(..., example="company")  # company, personal, others
 
 
+class UpdateLeadOutreachRequest(BaseModel):
+    """Per-lead outreach automation controls."""
+    job_url: str
+    outreach_mode: Optional[str] = Field(None, example="auto")  # auto | manual
+    outreach_state: Optional[str] = Field(None, example="open")  # open | closed
+    outreach_stage: Optional[int] = Field(None, ge=1, le=3, example=1)
+    next_send_at: Optional[str] = Field(None, example="2026-09-11")  # YYYY-MM-DD
+
+
+class BulkUpdateLeadOutreachRequest(BaseModel):
+    """Bulk update outreach fields for many leads."""
+    job_urls: List[str]
+    outreach_mode: Optional[str] = Field(None, example="auto")
+    outreach_state: Optional[str] = Field(None, example="open")
+    outreach_stage: Optional[int] = Field(None, ge=1, le=3)
+    next_send_at: Optional[str] = Field(None, example="2026-09-11")
+
+
 class InstantResearchRequest(BaseModel):
     """Payload for on-the-fly deep web research of companies and executives."""
     prompt: str = Field(..., example="Research fast-growing European B2B SaaS startups in AI & automation and extract their founders with direct emails.")

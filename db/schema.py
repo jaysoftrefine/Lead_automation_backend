@@ -45,6 +45,60 @@ def ensure_database_schema(conn: sqlite3.Connection) -> None:
         except Exception:
             pass
 
+    # Per-lead outreach automation (auto/manual mail fire + open/close + drip stage)
+    for col, col_type in (
+        ("outreach_mode", "TEXT DEFAULT 'auto'"),
+        ("outreach_state", "TEXT DEFAULT 'open'"),
+        ("outreach_stage", "INTEGER DEFAULT 1"),
+        ("next_send_at", "TEXT"),
+        ("last_sent_at", "TEXT"),
+    ):
+        try:
+            cur.execute(f"ALTER TABLE enriched_leads ADD COLUMN {col} {col_type}")
+        except Exception:
+            pass
+    try:
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_enriched_leads_outreach_due "
+            "ON enriched_leads(outreach_mode, outreach_state, next_send_at)"
+        )
+    except Exception:
+        pass
+
+    # Defaults for never-sent open tickets (delay/mode/state from env settings)
+    try:
+        from config.settings import settings
+        delay = max(0, int(settings.outreach_first_send_delay_days))
+        mode = (settings.outreach_default_mode or "auto").strip().lower()
+        state = (settings.outreach_default_state or "open").strip().lower()
+        if mode not in ("auto", "manual"):
+            mode = "auto"
+        if state not in ("open", "closed"):
+            state = "open"
+        cur.execute(
+            f"""
+            UPDATE enriched_leads
+            SET
+                outreach_mode = ?,
+                outreach_state = COALESCE(NULLIF(TRIM(outreach_state), ''), ?),
+                outreach_stage = COALESCE(outreach_stage, 1),
+                next_send_at = CASE
+                    WHEN next_send_at IS NULL OR TRIM(next_send_at) = ''
+                    THEN date(substr(COALESCE(scraped_at, created_at, CURRENT_TIMESTAMP), 1, 10), '+{delay} day')
+                    ELSE next_send_at
+                END
+            WHERE COALESCE(LOWER(outreach_state), 'open') = 'open'
+              AND (last_sent_at IS NULL OR TRIM(last_sent_at) = '')
+              AND (
+                outreach_mode IS NULL OR TRIM(outreach_mode) = ''
+                OR next_send_at IS NULL OR TRIM(next_send_at) = ''
+              )
+            """,
+            (mode, state),
+        )
+    except Exception:
+        pass
+
     # 2. Raw Scraped Jobs Table
     cur.execute("""
         CREATE TABLE IF NOT EXISTS raw_jobs (

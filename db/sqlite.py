@@ -162,6 +162,12 @@ class SqliteManager:
     def update_lead_type(self, job_url: str, lead_type: str) -> bool:
         return self.leads_repo.update_lead_type(job_url, lead_type)
 
+    def update_lead_outreach(self, job_url: str, **kwargs) -> bool:
+        return self.leads_repo.update_lead_outreach(job_url, **kwargs)
+
+    def get_due_outreach_leads(self, today_date_str: str) -> List[Dict[str, Any]]:
+        return self.leads_repo.get_due_outreach_leads(today_date_str)
+
     def delete_lead(self, job_url: str) -> bool:
         return self.leads_repo.delete_lead(job_url)
 

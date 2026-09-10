@@ -103,6 +103,33 @@ class Settings(BaseSettings):
         description="Daily 24-hour time to automatically run due scraping tasks (e.g. '22:00')",
         alias="SCRAPING_SCHEDULE_DAILY_TIME"
     )
+    outreach_schedule_daily_time: str = Field(
+        default="09:00",
+        description="Daily time to send due per-lead outreach emails (auto+open+date)",
+        alias="OUTREACH_SCHEDULE_DAILY_TIME"
+    )
+    outreach_stage_gap_days: int = Field(
+        default=6,
+        ge=1,
+        description="Days after a send before the next outreach template is due (6 → 7th day)",
+        alias="OUTREACH_STAGE_GAP_DAYS"
+    )
+    outreach_first_send_delay_days: int = Field(
+        default=1,
+        ge=0,
+        description="Days after scrap date for the first outreach send",
+        alias="OUTREACH_FIRST_SEND_DELAY_DAYS"
+    )
+    outreach_default_mode: str = Field(
+        default="auto",
+        description="Default outreach mode for new leads: auto | manual",
+        alias="OUTREACH_DEFAULT_MODE"
+    )
+    outreach_default_state: str = Field(
+        default="open",
+        description="Default outreach state for new leads: open | closed",
+        alias="OUTREACH_DEFAULT_STATE"
+    )
 
 
 settings = Settings()

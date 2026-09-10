@@ -13,8 +13,10 @@ from db.sqlite import sqlite_manager
 from schemas import (
     AddExtractedLeadRequest,
     BatchAddExtractedLeadsRequest,
+    BulkUpdateLeadOutreachRequest,
     CheckPresenceRequest,
     CreateManualLeadRequest,
+    UpdateLeadOutreachRequest,
     UpdateLeadStatusRequest,
     UpdateLeadTypeRequest,
 )
@@ -113,6 +115,100 @@ def update_lead_type(req: UpdateLeadTypeRequest):
         raise
     except Exception as e:
         logger.error(f"Error updating lead type: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _normalize_outreach_patch(req) -> dict:
+    """Validate and coerce outreach update fields."""
+    from datetime import date as date_cls
+
+    patch: Dict[str, Any] = {}
+    if req.outreach_mode is not None:
+        mode = req.outreach_mode.strip().lower()
+        if mode not in {"auto", "manual"}:
+            raise HTTPException(status_code=400, detail="outreach_mode must be 'auto' or 'manual'")
+        patch["outreach_mode"] = mode
+        # Enabling auto with no date → fire starting today
+        if mode == "auto" and req.next_send_at is None:
+            patch["next_send_at"] = date_cls.today().isoformat()
+    if req.outreach_state is not None:
+        state = req.outreach_state.strip().lower()
+        if state not in {"open", "closed"}:
+            raise HTTPException(status_code=400, detail="outreach_state must be 'open' or 'closed'")
+        patch["outreach_state"] = state
+    if req.outreach_stage is not None:
+        patch["outreach_stage"] = int(req.outreach_stage)
+    if req.next_send_at is not None:
+        patch["next_send_at"] = req.next_send_at.strip()[:10] or None
+    return patch
+
+
+@router.post("/leads/update-outreach")
+def update_lead_outreach(req: UpdateLeadOutreachRequest):
+    """Set auto/manual, open/closed, stage, and next send date for one lead."""
+    patch = _normalize_outreach_patch(req)
+    if not patch:
+        raise HTTPException(status_code=400, detail="No outreach fields to update")
+    # If next_send_at was auto-filled because mode=auto, only set if lead has none
+    try:
+        sqlite_manager.connect()
+        if patch.get("outreach_mode") == "auto" and req.next_send_at is None:
+            existing = sqlite_manager.get_lead_by_url(req.job_url)
+            if not existing:
+                raise HTTPException(status_code=404, detail="Lead not found")
+            if existing.get("next_send_at"):
+                patch.pop("next_send_at", None)
+            if not existing.get("outreach_stage"):
+                patch.setdefault("outreach_stage", 1)
+        updated = sqlite_manager.update_lead_outreach(req.job_url, **patch)
+        if not updated:
+            raise HTTPException(status_code=404, detail="Lead not found")
+        return {"success": True, **patch, "lead": sqlite_manager.get_lead_by_url(req.job_url)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating lead outreach: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/leads/bulk-update-outreach")
+def bulk_update_lead_outreach(req: BulkUpdateLeadOutreachRequest):
+    """Bulk set outreach fields for many job_urls."""
+    if not req.job_urls:
+        raise HTTPException(status_code=400, detail="job_urls required")
+    patch = _normalize_outreach_patch(req)
+    if not patch:
+        raise HTTPException(status_code=400, detail="No outreach fields to update")
+    try:
+        sqlite_manager.connect()
+        updated = 0
+        for url in req.job_urls:
+            lead_patch = dict(patch)
+            if lead_patch.get("outreach_mode") == "auto" and req.next_send_at is None:
+                existing = sqlite_manager.get_lead_by_url(url)
+                if existing and existing.get("next_send_at"):
+                    lead_patch.pop("next_send_at", None)
+                if existing and not existing.get("outreach_stage"):
+                    lead_patch.setdefault("outreach_stage", 1)
+            if sqlite_manager.update_lead_outreach(url, **lead_patch):
+                updated += 1
+        return {"success": True, "updated": updated}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error bulk updating outreach: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/leads/outreach/run-due")
+def run_due_outreach():
+    """Manually process all due auto+open outreach sends (same as daily scheduler)."""
+    try:
+        from email_campaigns.outreach_automation import process_due_outreach
+
+        return {"success": True, **process_due_outreach()}
+    except Exception as e:
+        logger.error(f"Error running due outreach: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
