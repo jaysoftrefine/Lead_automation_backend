@@ -10,7 +10,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.routes import router as api_router, websocket_pipeline_status
 from api.eu_startups import router as eu_startups_router
-from api.email import router as email_router
+from api.email import router as email_router, websocket_campaigns_progress
+from email_campaigns.ws_manager import campaign_ws_manager
 from config.settings import settings
 from core.logging import logger
 from db.sqlite import sqlite_manager
@@ -63,9 +64,20 @@ async def ws_pipeline_alias(websocket: WebSocket):
     await websocket_pipeline_status(websocket)
 
 
+@app.websocket("/ws/email/campaigns")
+async def ws_email_campaigns_alias(websocket: WebSocket):
+    """Direct root alias for email campaigns progress websocket."""
+    await websocket_campaigns_progress(websocket)
+
+
 @app.on_event("startup")
 async def startup_event():
     """Verify and initialize all database schemas on startup without fail."""
+    import asyncio
+    try:
+        campaign_ws_manager.set_loop(asyncio.get_running_loop())
+    except Exception:
+        pass
     logger.info("Initializing and verifying database schemas...")
     try:
         # 1. Initialize core lead tables (enriched_leads, raw_jobs, job_leads)

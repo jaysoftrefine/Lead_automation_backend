@@ -229,7 +229,7 @@ def _log_recipient(campaign_id: str, recipient: Dict, status: str, error: str = 
 
 
 def _update_campaign(campaign_id: str, **fields) -> None:
-    """Update campaign row with arbitrary fields."""
+    """Update campaign row with arbitrary fields and broadcast progress via WebSocket."""
     if not fields:
         return
     set_clauses = ", ".join(f"{k} = ?" for k in fields)
@@ -241,7 +241,11 @@ def _update_campaign(campaign_id: str, **fields) -> None:
             values,
         )
         conn.commit()
+        row = conn.execute("SELECT * FROM email_campaigns WHERE id = ?", (campaign_id,)).fetchone()
         conn.close()
+        if row:
+            from email_campaigns.ws_manager import campaign_ws_manager
+            campaign_ws_manager.broadcast_campaign_update(dict(row))
     except Exception:
         pass
 

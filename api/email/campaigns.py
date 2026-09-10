@@ -2,7 +2,9 @@ import json
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
+
+from email_campaigns.ws_manager import campaign_ws_manager
 
 from schemas import (
     CampaignCreate,
@@ -603,3 +605,46 @@ def get_campaign_logs(
         "page": page,
         "per_page": per_page,
     }
+
+
+@router.websocket("/campaigns/ws")
+async def websocket_campaigns_progress(websocket: WebSocket, campaign_id: Optional[str] = Query(None)):
+    """Real-time WebSocket endpoint streaming campaign progress and status updates."""
+    await campaign_ws_manager.connect(websocket)
+    try:
+        # If campaign_id was passed in query, immediately push its current state
+        if campaign_id:
+            conn = get_connection()
+            row = conn.execute("SELECT * FROM email_campaigns WHERE id = ?", (campaign_id,)).fetchone()
+            conn.close()
+            if row:
+                await websocket.send_json({
+                    "type": "campaign_progress",
+                    "campaign_id": campaign_id,
+                    "data": dict(row),
+                })
+
+        # Keep connection open and process pings/subscriptions
+        while True:
+            msg_text = await websocket.receive_text()
+            if msg_text == "ping":
+                await websocket.send_text("pong")
+            else:
+                try:
+                    payload = json.loads(msg_text)
+                    if payload.get("action") == "subscribe" and payload.get("campaign_id"):
+                        cid = payload["campaign_id"]
+                        conn = get_connection()
+                        row = conn.execute("SELECT * FROM email_campaigns WHERE id = ?", (cid,)).fetchone()
+                        conn.close()
+                        if row:
+                            await websocket.send_json({
+                                "type": "campaign_progress",
+                                "campaign_id": cid,
+                                "data": dict(row),
+                            })
+                except Exception:
+                    pass
+    except (WebSocketDisconnect, Exception):
+        campaign_ws_manager.disconnect(websocket)
+
