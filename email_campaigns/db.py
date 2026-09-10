@@ -713,6 +713,7 @@ def get_due_sequence_steps() -> list:
         FROM campaign_sequences cs
         JOIN email_campaigns ec ON ec.id = cs.campaign_id
         WHERE cs.status = 'pending'
+          AND ec.status NOT IN ('paused', 'cancelled', 'draft')
           AND cs.scheduled_at <= ?
         ORDER BY cs.scheduled_at
         """,

@@ -33,6 +33,7 @@ from schemas.email_schemas import (
     QueueItemUpdate,
     QueueSendRequest,
     SequenceStep,
+    SequenceStepUpdate,
 )
 
 __all__ = [
@@ -63,4 +64,5 @@ __all__ = [
     "QueueItemUpdate",
     "QueueSendRequest",
     "SequenceStep",
+    "SequenceStepUpdate",
 ]

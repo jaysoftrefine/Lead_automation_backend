@@ -18,6 +18,12 @@ SCHEDULER_INTERVAL = 300  # 5 minutes
 
 _scheduler_thread: Optional[threading.Thread] = None
 _stop_event = threading.Event()
+_wake_event = threading.Event()
+
+
+def wake_scheduler() -> None:
+    """Wake the sequence scheduler immediately (e.g. on new schedule or edit)."""
+    _wake_event.set()
 
 
 # ─────────────────────────────────────────────────────────────
@@ -166,12 +172,34 @@ def _send_step_and_update(
             smtp_account_id=smtp_account_id,
             cc=cc,
         )
-        update_sequence_step(
+        from email_campaigns.db import get_connection
+        from email_campaigns.ws_manager import campaign_ws_manager
+
+        step_info = update_sequence_step(
             step_id,
             status="completed",
             sent_count=len(recipients),
         )
         logger.info(f"✅ Sequence step {step_id} completed — {len(recipients)} sent.")
+
+        # Check if all steps for this campaign have completed
+        conn = get_connection()
+        campaign_id = step_info["campaign_id"] if step_info else pseudo_campaign_id.split("__step")[0]
+        remaining = conn.execute(
+            "SELECT COUNT(*) FROM campaign_sequences WHERE campaign_id = ? AND status IN ('pending', 'running')",
+            (campaign_id,),
+        ).fetchone()[0]
+        if remaining == 0:
+            conn.execute(
+                "UPDATE email_campaigns SET status = 'completed', finished_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (campaign_id,),
+            )
+            conn.commit()
+        camp_row = conn.execute("SELECT * FROM email_campaigns WHERE id = ?", (campaign_id,)).fetchone()
+        conn.close()
+
+        if camp_row:
+            campaign_ws_manager.broadcast_campaign_update(dict(camp_row))
     except Exception as e:
         update_sequence_step(step_id, status="failed")
         logger.error(f"❌ Step {step_id} send failed: {e}", exc_info=True)
@@ -260,15 +288,40 @@ def _scheduler_loop() -> None:
         except Exception as e:
             logger.error(f"Scheduler step-fire error: {e}", exc_info=True)
 
-        # Wait for next cycle or until stop is requested
-        _stop_event.wait(timeout=SCHEDULER_INTERVAL)
+        # Wait for next cycle or until stop or wake is requested
+        _wake_event.wait(timeout=SCHEDULER_INTERVAL)
+        _wake_event.clear()
 
     logger.info("📅 Sequence scheduler stopped.")
 
 
 # ─────────────────────────────────────────────────────────────
-# Public lifecycle functions (called from app.py)
+# Public lifecycle & trigger functions
 # ─────────────────────────────────────────────────────────────
+
+def fire_sequence_step_now(step_id: str) -> Dict[str, Any]:
+    """Force-fire a sequence step immediately in a background thread."""
+    from email_campaigns.db import get_sequence_step, get_connection
+    step = get_sequence_step(step_id)
+    if not step:
+        raise ValueError("Sequence step not found.")
+
+    conn = get_connection()
+    camp = conn.execute("SELECT * FROM email_campaigns WHERE id = ?", (step["campaign_id"],)).fetchone()
+    conn.close()
+    if not camp:
+        raise ValueError("Parent campaign not found.")
+
+    step_dict = dict(step)
+    camp_dict = dict(camp)
+    step_dict["audience_filter"] = camp_dict.get("audience_filter")
+    step_dict["smtp_account_id"] = camp_dict.get("smtp_account_id")
+    step_dict["reminder_email"] = camp_dict.get("reminder_email")
+    step_dict["reminder_hours_before"] = camp_dict.get("reminder_hours_before")
+
+    _fire_sequence_step(step_dict)
+    return get_sequence_step(step_id) or step_dict
+
 
 def start_scheduler() -> None:
     """Start the background scheduler thread. Safe to call multiple times."""
@@ -277,6 +330,7 @@ def start_scheduler() -> None:
         logger.info("Scheduler already running.")
         return
     _stop_event.clear()
+    _wake_event.clear()
     _scheduler_thread = threading.Thread(target=_scheduler_loop, daemon=True, name="SequenceScheduler")
     _scheduler_thread.start()
 
@@ -284,6 +338,7 @@ def start_scheduler() -> None:
 def stop_scheduler() -> None:
     """Signal the scheduler to stop gracefully."""
     _stop_event.set()
+    _wake_event.set()
     if _scheduler_thread:
         _scheduler_thread.join(timeout=10)
     logger.info("Sequence scheduler stopped.")

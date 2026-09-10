@@ -69,6 +69,15 @@ class SequenceStep(BaseModel):
     days_after: int = 0   # days after campaign start_date when this step fires
 
 
+class SequenceStepUpdate(BaseModel):
+    """Payload to update an individual sequence step (schedule, status, template)."""
+    status: Optional[str] = None          # 'pending' | 'paused' | 'skipped' | 'completed' | 'failed'
+    scheduled_at: Optional[str] = None    # ISO timestamp string for next fire time
+    days_after: Optional[int] = None      # Delay in days from start date
+    template_id: Optional[str] = None     # Template ID
+    subject: Optional[str] = None         # Custom subject override
+
+
 class CampaignCreate(BaseModel):
     """Payload to create a new outreach campaign."""
     name: str

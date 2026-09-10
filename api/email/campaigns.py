@@ -11,12 +11,14 @@ from schemas import (
     CampaignUpdate,
     CampaignPreviewGeneratedRequest,
     SequenceStep,
+    SequenceStepUpdate,
 )
 from email_campaigns.db import (
     get_connection,
     get_smtp_config,
     create_sequence_steps,
     list_sequence_steps,
+    get_sequence_step,
     update_sequence_step,
 )
 from email_campaigns.smtp_sender import test_smtp_connection
@@ -38,13 +40,23 @@ router = APIRouter()
 
 @router.get("/campaigns")
 def list_campaigns() -> Dict[str, Any]:
-    """List all email campaigns ordered by newest first."""
+    """List all email campaigns ordered by newest first, enriched with sequence status."""
     conn = get_connection()
     rows = conn.execute(
         "SELECT * FROM email_campaigns ORDER BY created_at DESC"
     ).fetchall()
     conn.close()
-    return {"status": "success", "data": [dict(r) for r in rows]}
+    campaigns = [dict(r) for r in rows]
+
+    for c in campaigns:
+        if c.get("campaign_type") == "sequence":
+            steps = list_sequence_steps(c["id"])
+            c["total_steps"] = len(steps)
+            c["completed_steps"] = sum(1 for s in steps if s.get("status") == "completed")
+            active_steps = [s for s in steps if s.get("status") in ("pending", "running", "paused")]
+            c["next_step"] = active_steps[0] if active_steps else None
+
+    return {"status": "success", "data": campaigns}
 
 
 @router.post("/campaigns")
@@ -332,6 +344,33 @@ def launch_campaign_by_id(campaign_id: str) -> Dict[str, Any]:
     attachment_name = camp["attachment_name"] if "attachment_name" in camp.keys() else tpl.get("attachment_name")
     cc = (camp_dict.get("cc") if "cc" in camp_dict else None) or tpl.get("cc") or ""
 
+    if camp_dict.get("campaign_type") == "sequence":
+        from datetime import timedelta
+        from email_campaigns.scheduler import wake_scheduler
+        start_date = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            "UPDATE email_campaigns SET status = 'scheduled', start_date = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (start_date, campaign_id),
+        )
+        conn.commit()
+        conn.close()
+
+        # Recalculate scheduled_at for pending steps based on launch start_date
+        steps = list_sequence_steps(campaign_id)
+        base = datetime.fromisoformat(start_date.replace("Z", "+00:00"))
+        for s in steps:
+            if s.get("status") == "pending":
+                days = int(s.get("days_after") or 0)
+                new_scheduled_at = (base + timedelta(days=days)).isoformat()
+                update_sequence_step(s["id"], scheduled_at=new_scheduled_at)
+
+        wake_scheduler()
+        return {
+            "status": "success",
+            "message": f"Sequence campaign launched! Step 1 will fire immediately; follow-ups will run on schedule.",
+            "data": {"campaign_id": campaign_id, "status": "scheduled"},
+        }
+
     conn.execute(
         "UPDATE email_campaigns SET status = 'queued', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
         (campaign_id,),
@@ -380,14 +419,129 @@ def delete_campaign(campaign_id: str) -> Dict[str, Any]:
 
 @router.get("/campaigns/{campaign_id}/steps")
 def get_campaign_steps(campaign_id: str) -> Dict[str, Any]:
-    """List all sequence steps for a campaign."""
+    """List all sequence steps for a campaign with parent campaign context."""
     conn = get_connection()
-    row = conn.execute("SELECT id FROM email_campaigns WHERE id = ?", (campaign_id,)).fetchone()
+    row = conn.execute("SELECT * FROM email_campaigns WHERE id = ?", (campaign_id,)).fetchone()
     conn.close()
     if not row:
         raise HTTPException(status_code=404, detail="Campaign not found.")
     steps = list_sequence_steps(campaign_id)
-    return {"status": "success", "data": steps}
+    return {"status": "success", "data": steps, "campaign": dict(row)}
+
+
+@router.patch("/campaigns/{campaign_id}/steps/{step_id}")
+def update_campaign_single_step(
+    campaign_id: str,
+    step_id: str,
+    body: SequenceStepUpdate,
+) -> Dict[str, Any]:
+    """
+    Update a single sequence step: pause/resume (status), reschedule (scheduled_at, days_after),
+    or change template/subject.
+    """
+    from email_campaigns.ws_manager import campaign_ws_manager
+    from email_campaigns.scheduler import wake_scheduler
+
+    step = get_sequence_step(step_id)
+    if not step or step.get("campaign_id") != campaign_id:
+        raise HTTPException(status_code=404, detail="Sequence step not found.")
+
+    updates: Dict[str, Any] = {}
+    if body.status is not None:
+        valid_statuses = {"pending", "paused", "skipped", "completed", "failed"}
+        if body.status not in valid_statuses:
+            raise HTTPException(status_code=400, detail=f"Invalid status '{body.status}'. Valid: {valid_statuses}")
+        updates["status"] = body.status
+
+    if body.scheduled_at is not None:
+        updates["scheduled_at"] = body.scheduled_at
+
+    if body.days_after is not None:
+        updates["days_after"] = int(body.days_after)
+
+    if body.template_id is not None:
+        conn = get_connection()
+        tpl = conn.execute("SELECT * FROM email_templates WHERE id = ?", (body.template_id,)).fetchone()
+        conn.close()
+        if not tpl:
+            raise HTTPException(status_code=404, detail="Template not found.")
+        updates["template_id"] = body.template_id
+        updates["template_name"] = tpl["name"]
+        if body.subject is None:
+            updates["subject"] = tpl["subject"]
+
+    if body.subject is not None:
+        updates["subject"] = body.subject
+
+    if not updates:
+        return {"status": "success", "message": "No updates provided.", "data": step}
+
+    updated = update_sequence_step(step_id, **updates)
+    wake_scheduler()
+
+    # Broadcast campaign progress update via websocket
+    conn = get_connection()
+    camp_row = conn.execute("SELECT * FROM email_campaigns WHERE id = ?", (campaign_id,)).fetchone()
+    conn.close()
+    if camp_row:
+        campaign_ws_manager.broadcast_campaign_update(dict(camp_row))
+
+    return {
+        "status": "success",
+        "message": f"Step #{step['step_number']} updated successfully.",
+        "data": updated,
+    }
+
+
+@router.post("/campaigns/{campaign_id}/steps/{step_id}/fire-now")
+def fire_sequence_step_immediately(campaign_id: str, step_id: str) -> Dict[str, Any]:
+    """Immediately trigger a sequence step in the background."""
+    from email_campaigns.scheduler import fire_sequence_step_now
+    try:
+        updated = fire_sequence_step_now(step_id)
+        return {
+            "status": "success",
+            "message": f"Step #{updated.get('step_number', 1)} triggered immediately.",
+            "data": updated,
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fire step: {e}")
+
+
+@router.post("/campaigns/{campaign_id}/toggle-pause")
+def toggle_campaign_pause_state(campaign_id: str) -> Dict[str, Any]:
+    """Pause or resume a sequence campaign."""
+    from email_campaigns.ws_manager import campaign_ws_manager
+    from email_campaigns.scheduler import wake_scheduler
+
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM email_campaigns WHERE id = ?", (campaign_id,)).fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Campaign not found.")
+
+    curr = row["status"]
+    new_status = "scheduled" if curr == "paused" else "paused"
+
+    conn.execute(
+        "UPDATE email_campaigns SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (new_status, campaign_id),
+    )
+    conn.commit()
+    updated = conn.execute("SELECT * FROM email_campaigns WHERE id = ?", (campaign_id,)).fetchone()
+    conn.close()
+
+    updated_dict = dict(updated)
+    campaign_ws_manager.broadcast_campaign_update(updated_dict)
+    wake_scheduler()
+
+    return {
+        "status": "success",
+        "message": f"Campaign is now {new_status}.",
+        "data": updated_dict,
+    }
 
 
 @router.put("/campaigns/{campaign_id}/steps")
@@ -411,6 +565,9 @@ def replace_campaign_steps(
     conn2.execute("UPDATE email_campaigns SET campaign_type = 'sequence' WHERE id = ?", (campaign_id,))
     conn2.commit()
     conn2.close()
+
+    from email_campaigns.scheduler import wake_scheduler
+    wake_scheduler()
 
     return {"status": "success", "message": f"{len(steps)} step(s) saved.", "data": steps}
 
