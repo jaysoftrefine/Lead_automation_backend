@@ -94,6 +94,31 @@ def ensure_database_schema(conn: sqlite3.Connection) -> None:
         )
     """)
 
+    # 4. Scheduled Scraping Jobs Table (CSV/Excel uploaded and scheduled tasks)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS scheduled_scraping_jobs (
+            id                      TEXT PRIMARY KEY,
+            job_title               TEXT NOT NULL,
+            target_location         TEXT,
+            company_size            TEXT,
+            scraping_limit          INTEGER DEFAULT 10,
+            scheduled_date          TEXT NOT NULL,
+            status                  TEXT DEFAULT 'pending',
+            result_count            INTEGER DEFAULT 0,
+            last_run_at             TIMESTAMP,
+            error_message           TEXT,
+            created_at              TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at              TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # Ensure scheduled_job_id column exists on enriched_leads and raw_jobs
+    for tbl in ("enriched_leads", "raw_jobs"):
+        try:
+            cur.execute(f"ALTER TABLE {tbl} ADD COLUMN scheduled_job_id TEXT")
+        except Exception:
+            pass
+
     # Indexes for high performance
     cur.execute("CREATE INDEX IF NOT EXISTS idx_enriched_leads_job_url ON enriched_leads(job_url)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_enriched_leads_company ON enriched_leads(company)")
@@ -102,12 +127,16 @@ def ensure_database_schema(conn: sqlite3.Connection) -> None:
     cur.execute("CREATE INDEX IF NOT EXISTS idx_enriched_leads_status ON enriched_leads(status)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_enriched_leads_created ON enriched_leads(created_at)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_enriched_leads_scraped ON enriched_leads(scraped_at)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_enriched_leads_sched_id ON enriched_leads(scheduled_job_id)")
 
     cur.execute("CREATE INDEX IF NOT EXISTS idx_raw_jobs_job_url ON raw_jobs(job_url)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_raw_jobs_scraped ON raw_jobs(scraped_at)")
 
     cur.execute("CREATE INDEX IF NOT EXISTS idx_job_leads_job_url ON job_leads(job_url)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_job_leads_company ON job_leads(company)")
+
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_scheduled_jobs_date ON scheduled_scraping_jobs(scheduled_date)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_scheduled_jobs_status ON scheduled_scraping_jobs(status)")
 
     # Backfill date_posted and scraped_at for any enriched leads missing them
     try:
@@ -127,6 +156,27 @@ def ensure_database_schema(conn: sqlite3.Connection) -> None:
                 )
             WHERE date_posted IS NULL OR scraped_at IS NULL
         """)
+    except Exception:
+        pass
+
+    # Baseline seed: if scheduled_scraping_jobs is empty and we have existing enriched_leads, link them to JOB-001
+    try:
+        cur.execute("SELECT COUNT(*) FROM scheduled_scraping_jobs")
+        count_jobs = cur.fetchone()[0]
+        if count_jobs == 0:
+            cur.execute("SELECT COUNT(*) FROM enriched_leads")
+            leads_cnt = cur.fetchone()[0]
+            if leads_cnt > 0:
+                cur.execute("""
+                    INSERT INTO scheduled_scraping_jobs (
+                        id, job_title, target_location, company_size, scraping_limit,
+                        scheduled_date, status, result_count, last_run_at, created_at, updated_at
+                    ) VALUES (
+                        'JOB-001', 'Software Engineer Freelancer', 'Worldwide (Remote)', 'Small / Startup (1-50)',
+                        ?, date('now'), 'completed', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                    )
+                """, (leads_cnt, leads_cnt))
+                cur.execute("UPDATE enriched_leads SET scheduled_job_id = 'JOB-001' WHERE scheduled_job_id IS NULL")
     except Exception:
         pass
 

@@ -27,9 +27,28 @@ def execute_pipeline_task(req: RunPipelineRequest):
     )
     pipeline_state.add_log(f"Target platforms: {', '.join(sites)} in '{req.location}'", "info")
 
+    scheduled_id = req.scheduled_job_id
     try:
         sqlite_manager.connect()
         pipeline_state.add_log("Connected to centralized SQLite database successfully.", "info")
+
+        if not scheduled_id:
+            scheduled_id = f"JOB-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+            req.scheduled_job_id = scheduled_id
+            try:
+                sqlite_manager.create_or_upsert_scheduled_job({
+                    "id": scheduled_id,
+                    "job_title": req.search_term,
+                    "target_location": req.location,
+                    "company_size": target_size,
+                    "scraping_limit": target_goal,
+                    "scheduled_date": datetime.utcnow().strftime("%Y-%m-%d"),
+                    "status": "running",
+                })
+            except Exception as se:
+                logger.warning(f"Could not auto-register scheduled job: {se}")
+        else:
+            sqlite_manager.update_scheduled_job_status(scheduled_id, status="running")
 
         provider_name = req.provider or req.llm_provider or settings.default_llm_provider
         model_name = req.model or req.model_name
@@ -157,6 +176,8 @@ def execute_pipeline_task(req: RunPipelineRequest):
                     "info"
                 )
 
+                if scheduled_id:
+                    job.scheduled_job_id = scheduled_id
                 sqlite_manager.save_raw_job(job)
 
                 if req.skip_existing and sqlite_manager.job_exists(job.job_url):
@@ -182,6 +203,8 @@ def execute_pipeline_task(req: RunPipelineRequest):
                             "warning"
                         )
                         metrics.rejected_by_llm += 1
+                        if scheduled_id:
+                            enriched_lead.scheduled_job_id = scheduled_id
                         sqlite_manager.upsert_enriched_lead(enriched_lead)
                         continue
 
@@ -202,6 +225,8 @@ def execute_pipeline_task(req: RunPipelineRequest):
                         metrics.rejected_by_llm += 1
                         continue
 
+                    if scheduled_id:
+                        enriched_lead.scheduled_job_id = scheduled_id
                     sqlite_manager.upsert_enriched_lead(enriched_lead)
                     metrics.saved_to_db += 1
                     pipeline_state.processed_count = metrics.saved_to_db
@@ -255,8 +280,28 @@ def execute_pipeline_task(req: RunPipelineRequest):
         )
         pipeline_state.finish(metrics=metrics)
 
+        if scheduled_id:
+            try:
+                final_status = "completed" if metrics.saved_to_db > 0 or not pipeline_state._stop_requested else "stopped"
+                sqlite_manager.update_scheduled_job_status(
+                    scheduled_id,
+                    status=final_status,
+                    result_count=metrics.saved_to_db
+                )
+            except Exception as se:
+                logger.warning(f"Failed to update scheduled job status: {se}")
+
     except Exception as e:
         logger.exception("Pipeline execution failed")
         pipeline_state.finish(error=str(e))
+        if scheduled_id:
+            try:
+                sqlite_manager.update_scheduled_job_status(
+                    scheduled_id,
+                    status="failed",
+                    error_message=str(e)
+                )
+            except Exception:
+                pass
     finally:
         pipeline_state.is_running = False

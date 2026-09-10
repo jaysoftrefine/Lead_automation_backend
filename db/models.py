@@ -41,6 +41,7 @@ class RawJobPosting(BaseModel):
     scraped_at: datetime = Field(default_factory=datetime.utcnow, description="Timestamp of scraping")
 
     # Extra raw attributes
+    scheduled_job_id: Optional[str] = Field(None, description="ID of scheduled scraping task")
     raw_metadata: Dict[str, Any] = Field(default_factory=dict, description="Any additional fields from scraper")
 
 
@@ -102,6 +103,10 @@ class EnrichedLead(BaseModel):
     status: str = Field(
         default="new",
         description="Lead status: new, contacted, qualified, rejected, archived"
+    )
+    scheduled_job_id: Optional[str] = Field(
+        default=None,
+        description="ID of the scheduled batch/scraping job that discovered this lead"
     )
     date_posted: Optional[str] = Field(None, description="Date or relative time job was posted")
     scraped_at: Optional[datetime] = Field(None, description="Timestamp of initial scrape")

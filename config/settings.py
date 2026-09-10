@@ -98,6 +98,11 @@ class Settings(BaseSettings):
         description="Logging level",
         alias="LOG_LEVEL"
     )
+    scraping_schedule_daily_time: str = Field(
+        default="22:00",
+        description="Daily 24-hour time to automatically run due scraping tasks (e.g. '22:00')",
+        alias="SCRAPING_SCHEDULE_DAILY_TIME"
+    )
 
 
 settings = Settings()

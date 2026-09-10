@@ -22,6 +22,7 @@ class RunPipelineRequest(BaseModel):
     hours_old: int = Field(168, ge=0)
     is_remote: bool = Field(True, description="Filter strictly for Remote positions within target location")
     skip_existing: bool = Field(False, description="Skip jobs that already exist in database")
+    scheduled_job_id: Optional[str] = Field(None, description="Optional ID of scheduled scraping task")
 
 
 class TestEnrichmentRequest(BaseModel):

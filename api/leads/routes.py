@@ -36,6 +36,7 @@ def get_leads(
     date_field: Optional[str] = Query("any", description="Filter field: 'any', 'posted', 'scraped'"),
     min_score: int = Query(0, ge=0, le=100, description="Minimum relevance score"),
     has_contacts: Optional[bool] = Query(None, description="Filter for leads with found contacts"),
+    scheduled_job_id: Optional[str] = Query(None, description="Filter leads by scheduled batch/scraping job ID"),
     limit: int = Query(50, ge=1, le=200),
     page: int = Query(1, ge=1),
 ):
@@ -55,6 +56,7 @@ def get_leads(
             date_field=date_field,
             min_score=min_score,
             has_contacts=has_contacts,
+            scheduled_job_id=scheduled_job_id,
             limit=limit,
             page=page,
         )

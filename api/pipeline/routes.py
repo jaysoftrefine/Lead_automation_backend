@@ -13,8 +13,10 @@ from enrichment.agent import LeadEnrichmentAgent
 from schemas import RunPipelineRequest, TestEnrichmentRequest
 from api.pipeline.runner import execute_pipeline_task
 from api.pipeline.state import pipeline_state, ws_manager
+from api.pipeline.schedule_routes import router as schedule_router
 
 router = APIRouter()
+router.include_router(schedule_router)
 
 
 @router.post("/pipeline/run")

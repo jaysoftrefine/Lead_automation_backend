@@ -18,6 +18,7 @@ from db.sqlite import sqlite_manager
 from eu_startups.db import create_database as create_eu_database
 from email_campaigns.db import init_email_tables
 from email_campaigns.scheduler import start_scheduler, stop_scheduler
+from pipeline.scheduler import start_scraping_scheduler, stop_scraping_scheduler
 
 # Base directory
 BASE_DIR = Path(__file__).resolve().parent
@@ -99,6 +100,10 @@ async def startup_event():
         # 5. Start the email sequence scheduler
         start_scheduler()
         logger.info("✅ Sequence scheduler started.")
+
+        # 6. Start the daily autonomous scraping scheduler
+        start_scraping_scheduler()
+        logger.info(f"✅ Daily scraping scheduler started (configured for {settings.scraping_schedule_daily_time} daily).")
     except Exception as e:
         logger.critical(f"❌ DATABASE STARTUP CHECK FAILED: {e}", exc_info=True)
         raise RuntimeError(f"Database startup check failed: {e}") from e
@@ -108,6 +113,7 @@ async def startup_event():
 async def shutdown_event():
     """Clean up SQLite connection and scheduler on shutdown."""
     stop_scheduler()
+    stop_scraping_scheduler()
     sqlite_manager.close()
     logger.info("FastAPI Web Server shut down.")
 

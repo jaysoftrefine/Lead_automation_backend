@@ -50,14 +50,17 @@ class LeadsRepository:
             date_posted_str = str(lead.date_posted) if lead.date_posted else None
             scraped_at_str = lead.scraped_at.isoformat() if isinstance(lead.scraped_at, datetime) else (str(lead.scraped_at) if lead.scraped_at else now_iso)
 
+            scheduled_job_id_val = getattr(lead, "scheduled_job_id", None)
+
             cur.execute("""
                 INSERT INTO enriched_leads (
                     job_url, title, company, site, location, job_type, job_description,
                     is_valid_lead, relevance_score, company_domain, company_summary,
                     company_size, contacts, key_technologies, hiring_urgency,
                     lead_summary, agent_thinking_process, search_queries_used,
-                    status, lead_type, date_posted, scraped_at, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    status, lead_type, date_posted, scraped_at, created_at, updated_at,
+                    scheduled_job_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(job_url) DO UPDATE SET
                     title=excluded.title,
                     company=excluded.company,
@@ -78,6 +81,7 @@ class LeadsRepository:
                     search_queries_used=excluded.search_queries_used,
                     status=excluded.status,
                     lead_type=excluded.lead_type,
+                    scheduled_job_id=COALESCE(excluded.scheduled_job_id, enriched_leads.scheduled_job_id),
                     date_posted=COALESCE(excluded.date_posted, enriched_leads.date_posted),
                     scraped_at=COALESCE(excluded.scraped_at, enriched_leads.scraped_at),
                     updated_at=?
@@ -106,6 +110,7 @@ class LeadsRepository:
                 scraped_at_str,
                 created_at_iso,
                 now_iso,
+                scheduled_job_id_val,
                 now_iso,
             ))
             conn.commit()
@@ -131,6 +136,7 @@ class LeadsRepository:
         date_field: Optional[str] = "any",
         min_score: int = 0,
         has_contacts: Optional[bool] = None,
+        scheduled_job_id: Optional[str] = None,
         limit: int = 50,
         page: int = 1,
     ) -> Dict[str, Any]:
@@ -140,6 +146,10 @@ class LeadsRepository:
             cur = conn.cursor()
             conditions = []
             params = []
+
+            if scheduled_job_id and scheduled_job_id.lower() != "all":
+                conditions.append("enriched_leads.scheduled_job_id = ?")
+                params.append(scheduled_job_id.strip())
 
             if min_score > 0:
                 conditions.append("enriched_leads.relevance_score >= ?")

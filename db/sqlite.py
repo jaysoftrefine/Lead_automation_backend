@@ -12,6 +12,7 @@ from db.repositories.jobs_repo import JobsRepository
 from db.repositories.leads_repo import LeadsRepository
 from db.repositories.maintenance_repo import MaintenanceRepository
 from db.repositories.stats_repo import StatsRepository
+from db.repositories.scheduled_jobs_repo import ScheduledJobsRepository
 from db.schema import ensure_database_schema
 
 
@@ -29,6 +30,7 @@ class SqliteManager:
         self.leads_repo = LeadsRepository(self.get_connection)
         self.stats_repo = StatsRepository(self.get_connection, str(self._db_path), self._ensure_tables)
         self.maintenance_repo = MaintenanceRepository(self.get_connection, self._format_lead_row)
+        self.scheduled_jobs_repo = ScheduledJobsRepository(self.get_connection)
 
     @property
     def db_path(self) -> str:
@@ -89,6 +91,7 @@ class SqliteManager:
         date_field: Optional[str] = "any",
         min_score: int = 0,
         has_contacts: Optional[bool] = None,
+        scheduled_job_id: Optional[str] = None,
         limit: int = 50,
         page: int = 1,
     ) -> Dict[str, Any]:
@@ -105,9 +108,50 @@ class SqliteManager:
             date_field=date_field,
             min_score=min_score,
             has_contacts=has_contacts,
+            scheduled_job_id=scheduled_job_id,
             limit=limit,
             page=page,
         )
+
+    # --- Delegated Scheduled Jobs Repository Methods ---
+    def create_or_upsert_scheduled_job(self, job: Dict[str, Any]) -> Dict[str, Any]:
+        return self.scheduled_jobs_repo.create_or_upsert_job(job)
+
+    def list_scheduled_jobs(
+        self,
+        status: Optional[str] = None,
+        scheduled_date: Optional[str] = None,
+        search: Optional[str] = None,
+        limit: int = 100,
+        page: int = 1,
+    ) -> Dict[str, Any]:
+        return self.scheduled_jobs_repo.list_jobs(
+            status=status,
+            scheduled_date=scheduled_date,
+            search=search,
+            limit=limit,
+            page=page,
+        )
+
+    def get_scheduled_job(self, job_id: str) -> Optional[Dict[str, Any]]:
+        return self.scheduled_jobs_repo.get_job_by_id(job_id)
+
+    def update_scheduled_job_status(
+        self,
+        job_id: str,
+        status: str,
+        result_count: Optional[int] = None,
+        error_message: Optional[str] = None,
+    ) -> bool:
+        return self.scheduled_jobs_repo.update_job_status(
+            job_id, status, result_count=result_count, error_message=error_message
+        )
+
+    def delete_scheduled_job(self, job_id: str) -> bool:
+        return self.scheduled_jobs_repo.delete_job(job_id)
+
+    def get_due_pending_jobs(self, today_date_str: str) -> List[Dict[str, Any]]:
+        return self.scheduled_jobs_repo.get_due_pending_jobs(today_date_str)
 
     def get_lead_by_url(self, job_url: str) -> Optional[Dict[str, Any]]:
         return self.leads_repo.get_lead_by_url(job_url)
