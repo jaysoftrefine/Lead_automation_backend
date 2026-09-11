@@ -4,7 +4,7 @@ import csv
 import io
 import re
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Any
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 import pandas as pd
@@ -275,3 +275,200 @@ def download_sample_schedule_template(format: str = Query("csv", pattern="^(csv|
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             headers={"Content-Disposition": "attachment; filename=hirepilot_scraping_schedule_template.xlsx"}
         )
+
+
+@router.get("/pipeline/automations/overview")
+def get_automations_overview():
+    """Unified overview of upcoming automations and execution history across scraping & outreach."""
+    try:
+        from config.settings import settings
+        import json
+        import sqlite3
+        from pathlib import Path
+
+        sqlite_manager.connect()
+        conn = sqlite_manager.get_connection()
+        cur = conn.cursor()
+
+        # 1. Scraping jobs: split into upcoming and history
+        cur.execute("SELECT * FROM scheduled_scraping_jobs ORDER BY created_at DESC")
+        all_jobs = [dict(r) for r in cur.fetchall()]
+
+        today_str = datetime.utcnow().strftime("%Y-%m-%d")
+        upcoming_scraping = []
+        history_scraping = []
+
+        for job in all_jobs:
+            status = (job.get("status") or "").lower()
+            sched_date = str(job.get("scheduled_date") or "")[:10]
+            if status in ("pending", "running") or (sched_date >= today_str and status != "completed"):
+                upcoming_scraping.append(job)
+            else:
+                history_scraping.append(job)
+
+        # 2. Upcoming Outreach Drips: auto + open + next_send_at
+        cur.execute("""
+            SELECT id, job_url, title, company, company_domain, lead_type,
+                   outreach_mode, outreach_state, outreach_stage, next_send_at, last_sent_at, contacts
+            FROM enriched_leads
+            WHERE is_valid_lead = 1
+              AND COALESCE(LOWER(outreach_mode), 'manual') = 'auto'
+              AND COALESCE(LOWER(outreach_state), 'open') = 'open'
+              AND next_send_at IS NOT NULL
+            ORDER BY next_send_at ASC
+            LIMIT 100
+        """)
+        raw_upcoming_outreach = [dict(r) for r in cur.fetchall()]
+        upcoming_outreach = []
+        for r in raw_upcoming_outreach:
+            if isinstance(r.get("contacts"), str):
+                try:
+                    r["contacts"] = json.loads(r["contacts"])
+                except Exception:
+                    r["contacts"] = []
+            upcoming_outreach.append(r)
+
+        # 3. History Outreach: sent emails (last_sent_at IS NOT NULL)
+        cur.execute("""
+            SELECT id, job_url, title, company, company_domain, lead_type,
+                   outreach_mode, outreach_state, outreach_stage, next_send_at, last_sent_at, contacts
+            FROM enriched_leads
+            WHERE is_valid_lead = 1
+              AND last_sent_at IS NOT NULL
+            ORDER BY last_sent_at DESC
+            LIMIT 100
+        """)
+        raw_history_outreach = [dict(r) for r in cur.fetchall()]
+        history_outreach = []
+        for r in raw_history_outreach:
+            if isinstance(r.get("contacts"), str):
+                try:
+                    r["contacts"] = json.loads(r["contacts"])
+                except Exception:
+                    r["contacts"] = []
+            history_outreach.append(r)
+
+        conn.close()
+
+        # 4. Email Campaigns DB (campaign sequences, delivery logs, queue items)
+        upcoming_campaign_steps = []
+        campaign_logs = []
+        pending_queue = []
+        sent_queue = []
+
+        email_db_path = Path(__file__).resolve().parent.parent.parent / "data" / "email_campaigns.db"
+        if email_db_path.exists():
+            try:
+                econn = sqlite3.connect(str(email_db_path))
+                econn.row_factory = sqlite3.Row
+                ecur = econn.cursor()
+
+                try:
+                    ecur.execute("""
+                        SELECT cs.*, ec.name as campaign_name
+                        FROM campaign_sequences cs
+                        LEFT JOIN email_campaigns ec ON cs.campaign_id = ec.id
+                        WHERE cs.status = 'scheduled'
+                        ORDER BY cs.scheduled_at ASC
+                        LIMIT 50
+                    """)
+                    upcoming_campaign_steps = [dict(r) for r in ecur.fetchall()]
+                except Exception:
+                    upcoming_campaign_steps = []
+
+                try:
+                    ecur.execute("""
+                        SELECT l.*, ec.name as campaign_name
+                        FROM email_campaign_logs l
+                        LEFT JOIN email_campaigns ec ON l.campaign_id = ec.id
+                        ORDER BY l.sent_at DESC
+                        LIMIT 100
+                    """)
+                    campaign_logs = [dict(r) for r in ecur.fetchall()]
+                except Exception:
+                    campaign_logs = []
+
+                try:
+                    ecur.execute("""
+                        SELECT id, template_name, recipient_name, recipient_email, company_name,
+                               subject, status, created_at, updated_at
+                        FROM email_queue_items
+                        WHERE status IN ('draft', 'pending')
+                        ORDER BY created_at DESC
+                        LIMIT 50
+                    """)
+                    pending_queue = [dict(r) for r in ecur.fetchall()]
+                except Exception:
+                    pending_queue = []
+
+                try:
+                    ecur.execute("""
+                        SELECT id, template_name, recipient_name, recipient_email, company_name,
+                               subject, status, error_message, sent_at
+                        FROM email_queue_items
+                        WHERE status IN ('sent', 'failed')
+                        ORDER BY sent_at DESC
+                        LIMIT 100
+                    """)
+                    sent_queue = [dict(r) for r in ecur.fetchall()]
+                except Exception:
+                    sent_queue = []
+
+                econn.close()
+            except Exception as edb_err:
+                logger.warning(f"Could not read email campaigns db in automations overview: {edb_err}")
+
+        schedulers = {
+            "scraping": {
+                "name": "Autonomous Scraping Engine",
+                "daily_time": getattr(settings, "scraping_schedule_daily_time", "22:00"),
+                "status": "active",
+                "description": "Scrapes and enriches leads for scheduled job postings daily",
+            },
+            "outreach": {
+                "name": "Daily Outreach Drip Mailer",
+                "daily_time": getattr(settings, "outreach_schedule_daily_time", "09:00"),
+                "status": "active",
+                "description": "Sends personalized cold outreach & follow-up drips daily",
+            },
+        }
+
+        total_upcoming_emails = len(upcoming_outreach) + len(upcoming_campaign_steps) + len(pending_queue)
+        total_history_emails = len(history_outreach) + len(campaign_logs) + len(sent_queue)
+
+        counts = {
+            "upcoming_scraping": len(upcoming_scraping),
+            "upcoming_outreach": len(upcoming_outreach),
+            "upcoming_campaign_steps": len(upcoming_campaign_steps),
+            "pending_queue": len(pending_queue),
+            "upcoming_emails": total_upcoming_emails,
+            "total_upcoming": len(upcoming_scraping) + total_upcoming_emails,
+            "history_scraping": len(history_scraping),
+            "history_outreach": len(history_outreach),
+            "campaign_logs": len(campaign_logs),
+            "sent_queue": len(sent_queue),
+            "history_emails": total_history_emails,
+            "total_history": len(history_scraping) + total_history_emails,
+        }
+
+        return {
+            "success": True,
+            "counts": counts,
+            "upcoming": {
+                "scraping_jobs": upcoming_scraping,
+                "outreach_drips": upcoming_outreach,
+                "campaign_steps": upcoming_campaign_steps,
+                "queue_items": pending_queue,
+            },
+            "history": {
+                "scraping_runs": history_scraping,
+                "outreach_sent": history_outreach,
+                "campaign_logs": campaign_logs,
+                "queue_sent": sent_queue,
+            },
+            "schedulers": schedulers,
+        }
+    except Exception as e:
+        logger.error(f"Error fetching automations overview: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
