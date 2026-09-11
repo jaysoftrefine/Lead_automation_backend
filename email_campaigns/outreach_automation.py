@@ -60,16 +60,32 @@ def advance_after_send(
     return next_stage, next_date, "open"
 
 
-def _first_contact_email(lead: Dict[str, Any]) -> Tuple[Optional[str], Optional[str], Optional[str]]:
-    contacts = lead.get("contacts") or []
+def _contacts_list(contacts: Any) -> List[Any]:
     if isinstance(contacts, str):
         try:
             contacts = json.loads(contacts)
         except Exception:
             contacts = []
-    for c in contacts:
+    return contacts or []
+
+
+def has_verified_email(contacts: Any) -> bool:
+    """True if any contact has an address that passed SMTP verification."""
+    for c in _contacts_list(contacts):
+        if hasattr(c, "email"):
+            email, verified = (getattr(c, "email", None) or "").strip(), bool(getattr(c, "is_verified", False))
+        else:
+            email, verified = (c.get("email") or "").strip(), bool(c.get("is_verified"))
+        if email and "@" in email and verified:
+            return True
+    return False
+
+
+def _first_contact_email(lead: Dict[str, Any]) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """First verified contact email only — never send to unverified / missing addresses."""
+    for c in _contacts_list(lead.get("contacts")):
         email = (c.get("email") or "").strip()
-        if email and "@" in email:
+        if email and "@" in email and c.get("is_verified"):
             return email, c.get("name"), c.get("role")
     return None, None, None
 
@@ -109,7 +125,10 @@ def send_one_outreach_lead(lead: Dict[str, Any]) -> Dict[str, Any]:
 
     to_email, person_name, role = _first_contact_email(lead)
     if not to_email:
-        return {"ok": False, "skipped": "no_email", "job_url": job_url}
+        # Drop from auto queue until a verified address exists
+        if job_url:
+            sqlite_manager.update_lead_outreach(job_url, clear_next_send_at=True)
+        return {"ok": False, "skipped": "no_verified_email", "job_url": job_url}
 
     smtp_cfg = get_smtp_config()
     sender_name = smtp_cfg.get("from_name", "HirePilot AI")
@@ -227,7 +246,7 @@ def stop_outreach_scheduler() -> None:
     _stop_event.set()
 
 
-# ponytail: one runnable check for stage advance (fails if drip logic breaks)
+# ponytail: one runnable check for drip + verified-email gate (fails if logic breaks)
 if __name__ == "__main__":
     assert template_name_for("company", 1) == "Company - Initial Outreach"
     assert template_name_for("personal", 3) == "Freelancer - Final Follow-up"
@@ -236,4 +255,13 @@ if __name__ == "__main__":
     assert (s, d, st) == (2, "2026-09-16", "open")
     s, d, st = advance_after_send(3, date(2026, 9, 10), gap_days=6)
     assert (s, d, st) == (3, None, "closed")
+    assert has_verified_email([{"email": "a@b.com", "is_verified": True}]) is True
+    assert has_verified_email([{"email": "a@b.com", "is_verified": False}]) is False
+    assert has_verified_email([{"email": "", "is_verified": True}]) is False
+    assert _first_contact_email({"contacts": [{"email": "x@y.com", "is_verified": False, "name": "X"}]})[0] is None
+    assert _first_contact_email({"contacts": [{"email": "x@y.com", "is_verified": True, "name": "X"}]}) == (
+        "x@y.com",
+        "X",
+        None,
+    )
     print("outreach_automation self-check OK")

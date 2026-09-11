@@ -64,10 +64,21 @@ class LeadsRepository:
                     mode = "auto"
                 if state not in ("open", "closed"):
                     state = "open"
-                next_send_default = (date_cls.fromisoformat(scraped_day) + timedelta(days=delay)).isoformat()
+                # Only schedule drip when a verified email exists
+                has_verified = any(
+                    bool(getattr(c, "is_verified", False))
+                    and (getattr(c, "email", None) or "")
+                    and "@" in (c.email or "")
+                    for c in (lead.contacts or [])
+                )
+                next_send_default = (
+                    (date_cls.fromisoformat(scraped_day) + timedelta(days=delay)).isoformat()
+                    if has_verified
+                    else None
+                )
             except Exception:
                 mode, state = "auto", "open"
-                next_send_default = scraped_day
+                next_send_default = None
 
             cur.execute("""
                 INSERT INTO enriched_leads (
@@ -452,6 +463,8 @@ class LeadsRepository:
             if outreach_state is not None:
                 sets.append("outreach_state = ?")
                 params.append(outreach_state)
+                if str(outreach_state).lower() == "closed":
+                    clear_next_send_at = True
             if outreach_stage is not None:
                 sets.append("outreach_stage = ?")
                 params.append(int(outreach_stage))

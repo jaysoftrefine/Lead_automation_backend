@@ -320,6 +320,8 @@ def get_automations_overview():
             ORDER BY next_send_at ASC
             LIMIT 100
         """)
+        from email_campaigns.outreach_automation import has_verified_email
+
         raw_upcoming_outreach = [dict(r) for r in cur.fetchall()]
         upcoming_outreach = []
         for r in raw_upcoming_outreach:
@@ -328,7 +330,9 @@ def get_automations_overview():
                     r["contacts"] = json.loads(r["contacts"])
                 except Exception:
                     r["contacts"] = []
-            upcoming_outreach.append(r)
+            # Only count drips that can actually send (verified email)
+            if has_verified_email(r.get("contacts")):
+                upcoming_outreach.append(r)
 
         # 3. History Outreach: sent emails (last_sent_at IS NOT NULL)
         cur.execute("""
