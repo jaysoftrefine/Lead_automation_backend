@@ -308,8 +308,10 @@ def get_automations_overview():
 
         # 2. Upcoming Outreach Drips: auto + open + next_send_at
         cur.execute("""
-            SELECT id, job_url, title, company, company_domain, lead_type,
-                   outreach_mode, outreach_state, outreach_stage, next_send_at, last_sent_at, contacts
+            SELECT id, job_url, title, company, company_domain, lead_type, location,
+                   company_summary, lead_summary, hiring_urgency, key_technologies, company_size,
+                   outreach_mode, outreach_state, outreach_stage, next_send_at, last_sent_at, contacts,
+                   created_at, scraped_at, scheduled_job_id
             FROM enriched_leads
             WHERE is_valid_lead = 1
               AND COALESCE(LOWER(outreach_mode), 'manual') = 'auto'
@@ -330,8 +332,10 @@ def get_automations_overview():
 
         # 3. History Outreach: sent emails (last_sent_at IS NOT NULL)
         cur.execute("""
-            SELECT id, job_url, title, company, company_domain, lead_type,
-                   outreach_mode, outreach_state, outreach_stage, next_send_at, last_sent_at, contacts
+            SELECT id, job_url, title, company, company_domain, lead_type, location,
+                   company_summary, lead_summary, hiring_urgency, key_technologies, company_size,
+                   outreach_mode, outreach_state, outreach_stage, next_send_at, last_sent_at, contacts,
+                   created_at, scraped_at, scheduled_job_id
             FROM enriched_leads
             WHERE is_valid_lead = 1
               AND last_sent_at IS NOT NULL
@@ -454,6 +458,7 @@ def get_automations_overview():
         return {
             "success": True,
             "counts": counts,
+            "jobs": all_jobs,
             "upcoming": {
                 "scraping_jobs": upcoming_scraping,
                 "outreach_drips": upcoming_outreach,
