@@ -8,7 +8,8 @@ loguru>=0.7.2
 rich>=13.7.1
 click>=8.1.7
 
-# Database (SQLite central + legacy MongoDB support)
+# Database (Supabase / PostgreSQL cloud + SQLite central + legacy MongoDB support)
+psycopg[binary,pool]>=3.1.18
 pymongo>=4.7.0
 motor>=3.4.0
 

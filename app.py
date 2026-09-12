@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from api.routes import router as api_router, websocket_pipeline_status
 from api.eu_startups import router as eu_startups_router
 from api.email import router as email_router, websocket_campaigns_progress
+from api.personal import router as personal_router
 from email_campaigns.ws_manager import campaign_ws_manager
 from config.settings import settings
 from core.logging import logger
@@ -59,6 +60,7 @@ if FRONTEND_DIST.exists():
 app.include_router(api_router)
 app.include_router(eu_startups_router)
 app.include_router(email_router)
+app.include_router(personal_router)
 
 
 @app.websocket("/ws/pipeline")
@@ -94,9 +96,11 @@ async def startup_event():
 
         # 4. Perform comprehensive integrity and schema verification
         health = sqlite_manager.verify_database_health()
+        db_path_label = health.get('db_path') or health.get('database_type', 'Active Database')
+        tbl_dict = health.get('tables') or health.get('table_counts', {})
         logger.info(
-            f"✅ Database startup check PASSED! Path: {health['db_path']}, "
-            f"Tables ({health['table_count']}): {list(health['tables'].keys())}"
+            f"✅ Database startup check PASSED! Path: {db_path_label}, "
+            f"Tables ({len(tbl_dict)}): {list(tbl_dict.keys())}"
         )
 
         # 5. Start the email sequence scheduler

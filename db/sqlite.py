@@ -344,5 +344,33 @@ class SqliteManager:
         }
 
 
-# Default singleton instance
-sqlite_manager = SqliteManager()
+class DatabaseProxy:
+    """Dispatches database calls to PostgresManager if DATABASE_URL is configured, otherwise SqliteManager."""
+
+    def __init__(self):
+        self._active_manager = None
+
+    def _get_manager(self):
+        if self._active_manager is None:
+            db_url = getattr(settings, "database_url", None)
+            if db_url and str(db_url).strip():
+                try:
+                    from db.postgres import PostgresManager
+                    self._active_manager = PostgresManager()
+                    logger.info("Active Database Engine: Supabase / PostgreSQL Cloud")
+                except Exception as e:
+                    logger.error(f"Failed to connect to Supabase PostgreSQL ({e}), falling back to SQLite.")
+                    self._active_manager = SqliteManager()
+            else:
+                self._active_manager = SqliteManager()
+        return self._active_manager
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._get_manager(), name)
+
+    def __repr__(self) -> str:
+        return repr(self._get_manager())
+
+
+# Default singleton instance (transparent proxy for Supabase or SQLite)
+sqlite_manager = DatabaseProxy()

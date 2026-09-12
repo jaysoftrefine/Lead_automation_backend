@@ -21,7 +21,10 @@ class StatsRepository:
             cur = conn.cursor()
 
             # Check table existence
-            cur.execute("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='enriched_leads'")
+            if getattr(conn, "is_postgres", False):
+                cur.execute("SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name='enriched_leads'")
+            else:
+                cur.execute("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='enriched_leads'")
             if cur.fetchone()[0] == 0:
                 self.ensure_tables()
 
@@ -48,19 +51,20 @@ class StatsRepository:
                 except Exception:
                     pass
 
+            db_label = "Supabase PostgreSQL" if getattr(conn, "is_postgres", False) else f"SQLite ({Path(self.db_path).name})"
             return {
                 "db_connected": True,
-                "database_name": f"SQLite ({Path(self.db_path).name})",
+                "database_name": db_label,
                 "leads_count": leads_count,
                 "raw_jobs_count": raw_count,
                 "total_contacts_discovered": total_contacts,
                 "avg_relevance_score": avg_score,
             }
         except Exception as e:
-            logger.error(f"Error calculating SQLite stats: {e}")
+            logger.error(f"Error calculating stats: {e}")
             return {
                 "db_connected": False,
-                "database_name": f"SQLite ({Path(self.db_path).name})",
+                "database_name": "Supabase PostgreSQL" if "Postgres" in str(self.db_path) else f"SQLite ({Path(self.db_path).name})",
                 "leads_count": 0,
                 "raw_jobs_count": 0,
                 "total_contacts_discovered": 0,

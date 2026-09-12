@@ -14,7 +14,15 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 DB_PATH = str(DATA_DIR / "email_campaigns.db")
 
 
-def get_connection() -> sqlite3.Connection:
+def get_connection():
+    """Get database connection (Supabase PostgreSQL if DATABASE_URL is set, otherwise SQLite)."""
+    try:
+        from config.settings import settings
+        if settings.database_url and str(settings.database_url).strip():
+            from db.sqlite import sqlite_manager
+            return sqlite_manager.get_connection()
+    except Exception:
+        pass
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
@@ -24,6 +32,9 @@ def get_connection() -> sqlite3.Connection:
 def init_email_tables() -> None:
     """Create all email-related tables if they don't exist."""
     conn = get_connection()
+    if getattr(conn, "is_postgres", False):
+        conn.close()
+        return
     cur = conn.cursor()
 
     # Email Templates

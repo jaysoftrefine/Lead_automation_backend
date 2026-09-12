@@ -15,7 +15,24 @@ class Settings(BaseSettings):
         populate_by_name=True,
     )
 
-    # SQLite Central Database Settings (Job Leads & Enriched Data)
+    # Cloud Database Settings (Supabase / PostgreSQL)
+    database_url: Optional[str] = Field(
+        default=None,
+        description="PostgreSQL / Supabase connection string (e.g. postgresql://postgres.xxx:pass@aws-0-region.pooler.supabase.com:6543/postgres)",
+        validation_alias=AliasChoices("DATABASE_URL", "SUPABASE_DB_URL", "POSTGRES_URL")
+    )
+    supabase_url: Optional[str] = Field(
+        default=None,
+        description="Supabase Project API URL (e.g. https://xyz.supabase.co)",
+        alias="SUPABASE_URL"
+    )
+    supabase_key: Optional[str] = Field(
+        default=None,
+        description="Supabase Anon / Service Role Key",
+        alias="SUPABASE_KEY"
+    )
+
+    # SQLite Central Database Settings (Fallback if DATABASE_URL is not set)
     sqlite_db_path: str = Field(
         default="data/leads.db",
         description="Path to job leads SQLite database file",

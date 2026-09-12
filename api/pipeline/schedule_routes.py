@@ -364,67 +364,65 @@ def get_automations_overview():
         pending_queue = []
         sent_queue = []
 
-        email_db_path = Path(__file__).resolve().parent.parent.parent / "data" / "email_campaigns.db"
-        if email_db_path.exists():
+        try:
+            from email_campaigns.db import get_connection as get_email_conn
+            econn = get_email_conn()
+            ecur = econn.cursor()
+
             try:
-                econn = sqlite3.connect(str(email_db_path))
-                econn.row_factory = sqlite3.Row
-                ecur = econn.cursor()
+                ecur.execute("""
+                    SELECT cs.*, ec.name as campaign_name
+                    FROM campaign_sequences cs
+                    LEFT JOIN email_campaigns ec ON cs.campaign_id = ec.id
+                    WHERE cs.status = 'scheduled'
+                    ORDER BY cs.scheduled_at ASC
+                    LIMIT 50
+                """)
+                upcoming_campaign_steps = [dict(r) for r in ecur.fetchall()]
+            except Exception:
+                upcoming_campaign_steps = []
 
-                try:
-                    ecur.execute("""
-                        SELECT cs.*, ec.name as campaign_name
-                        FROM campaign_sequences cs
-                        LEFT JOIN email_campaigns ec ON cs.campaign_id = ec.id
-                        WHERE cs.status = 'scheduled'
-                        ORDER BY cs.scheduled_at ASC
-                        LIMIT 50
-                    """)
-                    upcoming_campaign_steps = [dict(r) for r in ecur.fetchall()]
-                except Exception:
-                    upcoming_campaign_steps = []
+            try:
+                ecur.execute("""
+                    SELECT l.*, ec.name as campaign_name
+                    FROM email_campaign_logs l
+                    LEFT JOIN email_campaigns ec ON l.campaign_id = ec.id
+                    ORDER BY l.sent_at DESC
+                    LIMIT 100
+                """)
+                campaign_logs = [dict(r) for r in ecur.fetchall()]
+            except Exception:
+                campaign_logs = []
 
-                try:
-                    ecur.execute("""
-                        SELECT l.*, ec.name as campaign_name
-                        FROM email_campaign_logs l
-                        LEFT JOIN email_campaigns ec ON l.campaign_id = ec.id
-                        ORDER BY l.sent_at DESC
-                        LIMIT 100
-                    """)
-                    campaign_logs = [dict(r) for r in ecur.fetchall()]
-                except Exception:
-                    campaign_logs = []
+            try:
+                ecur.execute("""
+                    SELECT id, template_name, recipient_name, recipient_email, company_name,
+                           subject, status, created_at, updated_at
+                    FROM email_queue_items
+                    WHERE status IN ('draft', 'pending')
+                    ORDER BY created_at DESC
+                    LIMIT 50
+                """)
+                pending_queue = [dict(r) for r in ecur.fetchall()]
+            except Exception:
+                pending_queue = []
 
-                try:
-                    ecur.execute("""
-                        SELECT id, template_name, recipient_name, recipient_email, company_name,
-                               subject, status, created_at, updated_at
-                        FROM email_queue_items
-                        WHERE status IN ('draft', 'pending')
-                        ORDER BY created_at DESC
-                        LIMIT 50
-                    """)
-                    pending_queue = [dict(r) for r in ecur.fetchall()]
-                except Exception:
-                    pending_queue = []
+            try:
+                ecur.execute("""
+                    SELECT id, template_name, recipient_name, recipient_email, company_name,
+                           subject, status, error_message, sent_at
+                    FROM email_queue_items
+                    WHERE status IN ('sent', 'failed')
+                    ORDER BY sent_at DESC
+                    LIMIT 100
+                """)
+                sent_queue = [dict(r) for r in ecur.fetchall()]
+            except Exception:
+                sent_queue = []
 
-                try:
-                    ecur.execute("""
-                        SELECT id, template_name, recipient_name, recipient_email, company_name,
-                               subject, status, error_message, sent_at
-                        FROM email_queue_items
-                        WHERE status IN ('sent', 'failed')
-                        ORDER BY sent_at DESC
-                        LIMIT 100
-                    """)
-                    sent_queue = [dict(r) for r in ecur.fetchall()]
-                except Exception:
-                    sent_queue = []
-
-                econn.close()
-            except Exception as edb_err:
-                logger.warning(f"Could not read email campaigns db in automations overview: {edb_err}")
+            econn.close()
+        except Exception as edb_err:
+            logger.warning(f"Could not read email campaigns db in automations overview: {edb_err}")
 
         schedulers = {
             "scraping": {
