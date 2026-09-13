@@ -1,5 +1,6 @@
 """PostgreSQL / Supabase Database Manager for Autonomous Lead Generation Engine."""
 
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 import psycopg
@@ -33,6 +34,22 @@ def convert_placeholders(sql: str) -> str:
         else:
             out.append(ch)
     return "".join(out)
+
+
+def adapt_query_for_postgres(query: str) -> str:
+    """Adapt SQLite syntax to PostgreSQL: placeholders, introspection, and boolean literal comparisons."""
+    adapted = convert_placeholders(query)
+    if "sqlite_master" in adapted:
+        adapted = adapted.replace(
+            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='enriched_leads'",
+            "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name='enriched_leads'",
+        )
+    # Adapt boolean columns (e.g. is_default, use_ssl, use_tls) from integer 1/0 to Postgres boolean TRUE/FALSE
+    for col in ("is_default", "use_ssl", "use_tls"):
+        if col in adapted:
+            adapted = re.sub(rf'\b{col}\s*=\s*1\b', f'{col} = TRUE', adapted, flags=re.IGNORECASE)
+            adapted = re.sub(rf'\b{col}\s*=\s*0\b', f'{col} = FALSE', adapted, flags=re.IGNORECASE)
+    return adapted
 
 
 class SmartRow(dict):
@@ -77,14 +94,7 @@ class PostgresCursorWrapper:
         return self._cursor.description
 
     def execute(self, query: str, params: Any = None):
-        # Adapt placeholder from SQLite '?' to Postgres '%s'
-        adapted_query = convert_placeholders(query)
-        # Adapt sqlite_master introspection to Postgres information_schema
-        if "sqlite_master" in adapted_query:
-            adapted_query = adapted_query.replace(
-                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='enriched_leads'",
-                "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name='enriched_leads'",
-            )
+        adapted_query = adapt_query_for_postgres(query)
 
         if params is not None:
             if isinstance(params, (list, tuple)):
@@ -96,7 +106,7 @@ class PostgresCursorWrapper:
         return self
 
     def executemany(self, query: str, params_seq: Any):
-        adapted_query = convert_placeholders(query)
+        adapted_query = adapt_query_for_postgres(query)
         self._cursor.executemany(adapted_query, params_seq)
         return self
 

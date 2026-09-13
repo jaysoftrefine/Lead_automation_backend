@@ -310,10 +310,10 @@ def create_smtp_account(data: dict) -> dict:
 
     account_id = str(uuid.uuid4())
     count = cur.execute("SELECT COUNT(*) FROM smtp_accounts").fetchone()[0]
-    is_default = 1 if (data.get("is_default") or count == 0) else 0
+    is_default = bool(data.get("is_default") or count == 0)
 
     if is_default:
-        cur.execute("UPDATE smtp_accounts SET is_default = 0")
+        cur.execute("UPDATE smtp_accounts SET is_default = FALSE")
 
     cur.execute("""
         INSERT INTO smtp_accounts (
@@ -328,8 +328,8 @@ def create_smtp_account(data: dict) -> dict:
         data.get("smtp_user", "").strip(),
         data.get("smtp_pass", "").strip(),
         data.get("from_name", "HirePilot AI").strip(),
-        1 if data.get("use_ssl") else 0,
-        1 if data.get("use_tls", True) else 0,
+        bool(data.get("use_ssl", False)),
+        bool(data.get("use_tls", True)),
         is_default,
     ))
 
@@ -346,8 +346,8 @@ def create_smtp_account(data: dict) -> dict:
             data.get("smtp_user", "").strip(),
             data.get("smtp_pass", "").strip(),
             data.get("from_name", "HirePilot AI").strip(),
-            1 if data.get("use_ssl") else 0,
-            1 if data.get("use_tls", True) else 0,
+            bool(data.get("use_ssl", False)),
+            bool(data.get("use_tls", True)),
         ))
 
     conn.commit()
@@ -371,13 +371,13 @@ def update_smtp_account(account_id: str, data: dict) -> Optional[dict]:
     if not password or password == "••••••••":
         password = existing["smtp_pass"]
 
-    is_default = data.get("is_default")
-    if is_default is not None:
-        is_default = 1 if is_default else 0
+    is_default_val = data.get("is_default")
+    if is_default_val is not None:
+        is_default = bool(is_default_val)
         if is_default:
-            cur.execute("UPDATE smtp_accounts SET is_default = 0")
+            cur.execute("UPDATE smtp_accounts SET is_default = FALSE")
     else:
-        is_default = existing["is_default"]
+        is_default = bool(existing.get("is_default", False))
 
     cur.execute("""
         UPDATE smtp_accounts SET
@@ -399,8 +399,8 @@ def update_smtp_account(account_id: str, data: dict) -> Optional[dict]:
         data.get("smtp_user", existing["smtp_user"]).strip(),
         password,
         data.get("from_name", existing["from_name"]).strip(),
-        1 if data.get("use_ssl", bool(existing["use_ssl"])) else 0,
-        1 if data.get("use_tls", bool(existing["use_tls"])) else 0,
+        bool(data.get("use_ssl", existing.get("use_ssl", False))),
+        bool(data.get("use_tls", existing.get("use_tls", True))),
         is_default,
         account_id,
     ))
@@ -418,8 +418,8 @@ def update_smtp_account(account_id: str, data: dict) -> Optional[dict]:
             data.get("smtp_user", existing["smtp_user"]).strip(),
             password,
             data.get("from_name", existing["from_name"]).strip(),
-            1 if data.get("use_ssl", bool(existing["use_ssl"])) else 0,
-            1 if data.get("use_tls", bool(existing["use_tls"])) else 0,
+            bool(data.get("use_ssl", existing.get("use_ssl", False))),
+            bool(data.get("use_tls", existing.get("use_tls", True))),
         ))
 
     conn.commit()
@@ -444,7 +444,7 @@ def delete_smtp_account(account_id: str) -> bool:
     if was_default:
         first = cur.execute("SELECT id FROM smtp_accounts ORDER BY created_at ASC LIMIT 1").fetchone()
         if first:
-            cur.execute("UPDATE smtp_accounts SET is_default = 1 WHERE id = ?", (first[0],))
+            cur.execute("UPDATE smtp_accounts SET is_default = TRUE WHERE id = ?", (first[0],))
 
     conn.commit()
     conn.close()
@@ -461,8 +461,8 @@ def set_default_smtp_account(account_id: str) -> bool:
         conn.close()
         return False
 
-    cur.execute("UPDATE smtp_accounts SET is_default = 0")
-    cur.execute("UPDATE smtp_accounts SET is_default = 1 WHERE id = ?", (account_id,))
+    cur.execute("UPDATE smtp_accounts SET is_default = FALSE")
+    cur.execute("UPDATE smtp_accounts SET is_default = TRUE WHERE id = ?", (account_id,))
 
     # Update legacy table
     r = dict(row)
@@ -473,7 +473,7 @@ def set_default_smtp_account(account_id: str) -> bool:
         WHERE id = 1
     """, (
         r["smtp_host"], r["smtp_port"], r["smtp_user"], r["smtp_pass"],
-        r["from_name"], r["use_ssl"], r["use_tls"],
+        r["from_name"], bool(r.get("use_ssl", False)), bool(r.get("use_tls", True)),
     ))
 
     conn.commit()
@@ -495,7 +495,7 @@ def get_smtp_config(account_id: Optional[str] = None) -> dict:
 
     # If no specific account found or requested, find default account
     if not row:
-        row = conn.execute("SELECT * FROM smtp_accounts WHERE is_default = 1 LIMIT 1").fetchone()
+        row = conn.execute("SELECT * FROM smtp_accounts WHERE is_default = TRUE LIMIT 1").fetchone()
 
     # If still no default, pick any account
     if not row:
@@ -518,8 +518,8 @@ def get_smtp_config(account_id: Optional[str] = None) -> dict:
         "smtp_pass":  row.get("smtp_pass") or os.environ.get("SMTP_PASS", ""),
         "from_name":  row.get("from_name") or os.environ.get("SMTP_FROM_NAME", "HirePilot AI"),
         "use_ssl":    bool(row.get("use_ssl") or os.environ.get("SMTP_USE_SSL", "").lower() in ("true", "1")),
-        "use_tls":    bool(row.get("use_tls", 1) or os.environ.get("SMTP_USE_TLS", "true").lower() in ("true", "1")),
-        "is_default": bool(row.get("is_default", 1)),
+        "use_tls":    bool(row.get("use_tls", True) if row.get("use_tls") is not None else os.environ.get("SMTP_USE_TLS", "true").lower() in ("true", "1")),
+        "is_default": bool(row.get("is_default", True)),
     }
 
 
@@ -534,24 +534,24 @@ def save_smtp_config(host: str, port: int, user: str, password: str,
             from_name = ?, use_ssl = ?, use_tls = ?,
             updated_at = CURRENT_TIMESTAMP
         WHERE id = 1
-    """, (host, port, user, password, from_name, int(use_ssl), int(use_tls)))
+    """, (host, port, user, password, from_name, bool(use_ssl), bool(use_tls)))
 
     # Also update or insert default account in smtp_accounts
-    default_acc = cur.execute("SELECT id FROM smtp_accounts WHERE is_default = 1 LIMIT 1").fetchone()
+    default_acc = cur.execute("SELECT id FROM smtp_accounts WHERE is_default = TRUE LIMIT 1").fetchone()
     if default_acc:
         cur.execute("""
             UPDATE smtp_accounts SET
                 name = ?, smtp_host = ?, smtp_port = ?, smtp_user = ?, smtp_pass = ?,
                 from_name = ?, use_ssl = ?, use_tls = ?, updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
-        """, (from_name or "Default Account", host, port, user, password, from_name, int(use_ssl), int(use_tls), default_acc[0]))
+        """, (from_name or "Default Account", host, port, user, password, from_name, bool(use_ssl), bool(use_tls), default_acc[0]))
     else:
         acc_id = str(uuid.uuid4())
         cur.execute("""
             INSERT INTO smtp_accounts (
                 id, name, smtp_host, smtp_port, smtp_user, smtp_pass, from_name, use_ssl, use_tls, is_default
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
-        """, (acc_id, from_name or "Default Account", host, port, user, password, from_name, int(use_ssl), int(use_tls)))
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE)
+        """, (acc_id, from_name or "Default Account", host, port, user, password, from_name, bool(use_ssl), bool(use_tls)))
 
     conn.commit()
     conn.close()
