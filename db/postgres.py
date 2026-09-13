@@ -129,6 +129,9 @@ class PostgresCursorWrapper:
         self.close()
 
 
+from psycopg.pq import TransactionStatus
+
+
 class PostgresConnectionWrapper:
     """Wraps a psycopg connection from the pool, adapting cursor creation and life cycle."""
 
@@ -147,13 +150,24 @@ class PostgresConnectionWrapper:
         return cur.execute(query, params)
 
     def commit(self):
-        self._raw_conn.commit()
+        if not self._raw_conn.closed:
+            self._raw_conn.commit()
 
     def rollback(self):
-        self._raw_conn.rollback()
+        if not self._raw_conn.closed:
+            try:
+                self._raw_conn.rollback()
+            except Exception:
+                pass
 
     def close(self):
         if not self._closed:
+            if not self._raw_conn.closed:
+                try:
+                    if self._raw_conn.info.transaction_status == TransactionStatus.INTRANS:
+                        self._raw_conn.rollback()
+                except Exception:
+                    pass
             self._pool.putconn(self._raw_conn)
             self._closed = True
 
@@ -179,11 +193,19 @@ class PostgresManager:
             delimiter = "&" if "?" in self.database_url else "?"
             self.database_url = f"{self.database_url}{delimiter}sslmode=require"
 
+        # Add TCP keepalives to prevent AWS/Supabase pooler from silently dropping idle sockets
+        if "keepalives=" not in self.database_url:
+            delimiter = "&" if "?" in self.database_url else "?"
+            self.database_url = f"{self.database_url}{delimiter}keepalives=1&keepalives_idle=30&keepalives_interval=10&keepalives_count=5"
+
         self._pool = ConnectionPool(
             conninfo=self.database_url,
             min_size=1,
             max_size=15,
             timeout=10.0,
+            max_idle=45.0,
+            max_lifetime=300.0,
+            check=ConnectionPool.check_connection,
             open=True,
         )
 

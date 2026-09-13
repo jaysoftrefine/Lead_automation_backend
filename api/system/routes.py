@@ -72,8 +72,14 @@ def export_database_api():
 @router.get("/stats")
 def get_stats():
     """Get system statistics, database counts, and configuration status."""
-    sqlite_manager.connect()
-    db_stats = sqlite_manager.get_stats()
+    try:
+        db_stats = sqlite_manager.get_stats()
+    except Exception as e:
+        logger.warning(f"Could not retrieve DB stats: {e}")
+        db_stats = {
+            "db_connected": False,
+            "database_name": getattr(sqlite_manager, "database_type", "Database"),
+        }
 
     return {
         "db_connected": db_stats.get("db_connected", True),
