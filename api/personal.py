@@ -308,8 +308,8 @@ def send_application(body: SendApplicationRequest) -> Dict[str, Any]:
         sender_email = cfg.get("smtp_user", "")
         conn.execute(
             """
-            INSERT INTO email_campaign_logs (id, campaign_id, recipient_name, recipient_email, company_name, status, sent_at, sender_email)
-            VALUES (?, ?, ?, ?, ?, 'sent', ?, ?)
+            INSERT INTO email_campaign_logs (id, campaign_id, recipient_name, recipient_email, company_name, status, sent_at, sender_email, subject, body, attachment_name)
+            VALUES (?, ?, ?, ?, ?, 'sent', ?, ?, ?, ?, ?)
             """,
             (
                 log_id,
@@ -319,6 +319,9 @@ def send_application(body: SendApplicationRequest) -> Dict[str, Any]:
                 body.company_name,
                 now_iso,
                 sender_email,
+                body.subject,
+                body.body,
+                resume_name or "Resume.pdf",
             ),
         )
         conn.commit()
@@ -419,4 +422,39 @@ def search_jobs(
             "message": f"Job search query completed with notes: {str(e)}",
             "data": [],
         }
+
+
+@router.get("/applications")
+def get_personal_applications() -> Dict[str, Any]:
+    """Retrieve all personal job applications sent with resume and email details."""
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT id, campaign_id, recipient_name, recipient_email, company_name,
+                   sender_email, status, error_message, sent_at, subject, body, attachment_name
+            FROM email_campaign_logs
+            ORDER BY sent_at DESC
+        """)
+        rows = cur.fetchall()
+        logs = []
+        for r in rows:
+            if hasattr(r, "keys"):
+                d = dict(r)
+                if "sent_at" in d and d["sent_at"] is not None:
+                    d["sent_at"] = str(d["sent_at"])
+                logs.append(d)
+            else:
+                logs.append({
+                    "id": r[0], "campaign_id": r[1], "recipient_name": r[2],
+                    "recipient_email": r[3], "company_name": r[4], "sender_email": r[5],
+                    "status": r[6], "error_message": r[7], "sent_at": str(r[8]) if r[8] else "",
+                    "subject": r[9] if len(r) > 9 else "",
+                    "body": r[10] if len(r) > 10 else "",
+                    "attachment_name": r[11] if len(r) > 11 else "Jay_Kakadia_Resume.pdf"
+                })
+        return {"status": "success", "count": len(logs), "data": logs}
+    finally:
+        conn.close()
+
 
