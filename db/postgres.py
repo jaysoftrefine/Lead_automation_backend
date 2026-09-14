@@ -49,6 +49,8 @@ def adapt_query_for_postgres(query: str) -> str:
         if col in adapted:
             adapted = re.sub(rf'\b{col}\s*=\s*1\b', f'{col} = TRUE', adapted, flags=re.IGNORECASE)
             adapted = re.sub(rf'\b{col}\s*=\s*0\b', f'{col} = FALSE', adapted, flags=re.IGNORECASE)
+    # Strip contacts != '' comparisons since contacts is JSONB in Postgres and empty string is invalid JSON syntax
+    adapted = re.sub(r"\s+AND\s+([\w\.]*contacts\s*!=\s*'')", "", adapted, flags=re.IGNORECASE)
     return adapted
 
 
