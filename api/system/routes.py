@@ -1,14 +1,13 @@
-"""FastAPI Router for System statistics, export, database maintenance, and instant research."""
-
+import asyncio
 import csv
 import io
 import json
 from datetime import datetime
 from typing import Any, Dict, List, Optional
-from fastapi import APIRouter, HTTPException, Query, Request, Response
+from fastapi import APIRouter, HTTPException, Query, Request, Response, WebSocket, WebSocketDisconnect
 
 from config.settings import settings
-from core.logging import logger
+from core.logging import logger, log_stream_manager
 from db.sqlite import sqlite_manager
 from llm.registry import LLMProviderRegistry
 from schemas import InstantResearchRequest
@@ -85,9 +84,11 @@ def get_stats():
         "db_connected": db_stats.get("db_connected", True),
         "database_name": db_stats.get("database_name", "SQLite"),
         "default_provider": settings.default_llm_provider,
-        "gemini_configured": bool(settings.google_api_key and settings.google_api_key != "your_google_api_key_here"),
+        "gemini_configured": bool(settings.get_google_api_keys()),
         "nvidia_configured": bool(settings.nvidia_api_key and settings.nvidia_api_key != "your_nvidia_api_key_here"),
-        "tavily_configured": bool(settings.tavily_api_key and settings.tavily_api_key != "your_tavily_api_key_here"),
+        # "tavily_configured": bool(settings.tavily_api_key and settings.tavily_api_key != "your_tavily_api_key_here"),
+        "tavily_configured": False,  # Deprecated in favor of DDGS + ReAct CoT Search
+        "web_search_configured": True,
         "leads_count": db_stats.get("leads_count", 0),
         "raw_jobs_count": db_stats.get("raw_jobs_count", 0),
         "total_contacts_discovered": db_stats.get("total_contacts_discovered", 0),
@@ -104,9 +105,13 @@ def run_instant_research(req: InstantResearchRequest):
         raise HTTPException(status_code=400, detail="Research prompt cannot be empty.")
 
     try:
-        from enrichment.tools.web_search import TavilySearchTool
-        tavily = TavilySearchTool()
-        search_results = tavily.search(query=prompt, max_results=req.max_search_results or 5, search_depth="advanced")
+        # Tavily search is deprecated & commented out:
+        # from enrichment.tools.web_search import TavilySearchTool
+        # tavily = TavilySearchTool()
+        # search_results = tavily.search(query=prompt, max_results=req.max_search_results or 5, search_depth="advanced")
+        from enrichment.tools.web_search import WebSearchTool
+        search_tool = WebSearchTool()
+        search_results = search_tool.search(query=prompt, max_results=req.max_search_results or 5, search_depth="advanced")
 
         sources: List[str] = []
         search_context_snippets: List[str] = []
@@ -307,3 +312,57 @@ def export_leads_csv(
     except Exception as e:
         logger.error(f"CSV export error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─────────────────────────────────────────────
+# Real-Time Terminal & Application Logs Endpoints
+# ─────────────────────────────────────────────
+
+@router.websocket("/system/ws/logs")
+async def websocket_logs_stream(websocket: WebSocket):
+    """Real-time WebSocket endpoint streaming terminal and application logs to frontend."""
+    await log_stream_manager.connect(websocket)
+    try:
+        recent_logs = log_stream_manager.get_recent(limit=150)
+        await websocket.send_json({
+            "type": "init",
+            "logs": recent_logs,
+            "connected_at": datetime.now().isoformat(),
+        })
+
+        while True:
+            try:
+                msg = await asyncio.wait_for(websocket.receive_text(), timeout=1.0)
+                if msg == "ping":
+                    await websocket.send_text("pong")
+                elif msg == "clear":
+                    log_stream_manager.clear()
+                    await websocket.send_json({"type": "cleared"})
+            except asyncio.TimeoutError:
+                pass
+    except (WebSocketDisconnect, Exception):
+        pass
+    finally:
+        log_stream_manager.disconnect(websocket)
+
+
+@router.get("/system/logs")
+def get_in_memory_logs(
+    limit: int = Query(200, ge=1, le=2000),
+    level: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
+):
+    """Retrieve filtered recent logs from in-memory ring buffer."""
+    logs = log_stream_manager.get_recent(limit=limit, level=level, search=search)
+    return {
+        "success": True,
+        "count": len(logs),
+        "logs": logs,
+    }
+
+
+@router.post("/system/logs/clear")
+def clear_in_memory_logs():
+    """Clear the in-memory ring buffer of logs."""
+    log_stream_manager.clear()
+    return {"success": True, "message": "In-memory logs buffer cleared."}

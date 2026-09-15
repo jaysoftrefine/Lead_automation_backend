@@ -195,6 +195,48 @@ class ScheduledJobsRepository:
             cur.execute(f"UPDATE scheduled_scraping_jobs SET {', '.join(updates)} WHERE id = ?", params)
             conn.commit()
             return cur.rowcount > 0
+    def update_scheduled_job(
+        self,
+        job_id: str,
+        job_title: Optional[str] = None,
+        target_location: Optional[str] = None,
+        company_size: Optional[str] = None,
+        scraping_limit: Optional[int] = None,
+        scheduled_date: Optional[str] = None,
+    ) -> bool:
+        """Update configurable fields of a scheduled job."""
+        conn = self.get_connection()
+        try:
+            cur = conn.cursor()
+            now_iso = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+
+            updates = ["updated_at = ?"]
+            params: List[Any] = [now_iso]
+
+            if job_title is not None:
+                updates.append("job_title = ?")
+                params.append(job_title.strip())
+
+            if target_location is not None:
+                updates.append("target_location = ?")
+                params.append(target_location.strip())
+
+            if company_size is not None:
+                updates.append("company_size = ?")
+                params.append(company_size.strip())
+
+            if scraping_limit is not None:
+                updates.append("scraping_limit = ?")
+                params.append(int(scraping_limit))
+
+            if scheduled_date is not None:
+                updates.append("scheduled_date = ?")
+                params.append(scheduled_date.strip())
+
+            params.append(job_id)
+            cur.execute(f"UPDATE scheduled_scraping_jobs SET {', '.join(updates)} WHERE id = ?", params)
+            conn.commit()
+            return cur.rowcount > 0
         finally:
             conn.close()
 

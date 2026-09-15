@@ -12,8 +12,17 @@ import pandas as pd
 from core.logging import logger
 from db.sqlite import sqlite_manager
 from pipeline.scheduler import run_scheduled_job_now
+from pydantic import BaseModel, Field
 
 router = APIRouter()
+
+
+class UpdateScheduledJobRequest(BaseModel):
+    job_title: Optional[str] = Field(None, description="Job title / role to scrape")
+    target_location: Optional[str] = Field(None, description="Target location")
+    company_size: Optional[str] = Field(None, description="Company size range")
+    scraping_limit: Optional[int] = Field(None, ge=1, le=500, description="Number of leads to scrape")
+    scheduled_date: Optional[str] = Field(None, description="Scheduled date (YYYY-MM-DD)")
 
 
 def _normalize_header(col_name: str) -> str:
@@ -205,6 +214,44 @@ def trigger_scheduled_job_now(job_id: str):
         raise HTTPException(status_code=409, detail=str(re))
     except Exception as e:
         logger.error(f"Error running scheduled job {job_id}: {e}")
+@router.put("/pipeline/schedule/{job_id}")
+def update_scheduled_job(job_id: str, payload: UpdateScheduledJobRequest):
+    """Update a scheduled scraping task."""
+    try:
+        sqlite_manager.connect()
+        existing = sqlite_manager.get_scheduled_job(job_id)
+        if not existing:
+            raise HTTPException(status_code=404, detail="Scheduled job not found")
+
+        if existing.get("status") not in ("pending", "failed"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot edit job with status '{existing.get('status')}'. Only pending or failed tasks can be edited."
+            )
+
+        parsed_date = _parse_scheduled_date(payload.scheduled_date) if payload.scheduled_date else None
+
+        success = sqlite_manager.update_scheduled_job(
+            job_id=job_id,
+            job_title=payload.job_title,
+            target_location=payload.target_location,
+            company_size=payload.company_size,
+            scraping_limit=payload.scraping_limit,
+            scheduled_date=parsed_date,
+        )
+        if not success:
+            raise HTTPException(status_code=400, detail="Failed to update scheduled job")
+
+        updated = sqlite_manager.get_scheduled_job(job_id)
+        return {
+            "success": True,
+            "message": f"Updated task {job_id} successfully.",
+            "job": updated,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating job {job_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

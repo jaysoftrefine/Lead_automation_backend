@@ -10,7 +10,7 @@ from fastapi import APIRouter
 
 from api.leads.routes import router as leads_router
 from api.pipeline.routes import router as pipeline_router, websocket_pipeline_status
-from api.system.routes import router as system_router
+from api.system.routes import router as system_router, websocket_logs_stream
 
 router = APIRouter(prefix="/api")
 
@@ -18,4 +18,4 @@ router.include_router(leads_router)
 router.include_router(pipeline_router)
 router.include_router(system_router)
 
-__all__ = ["router", "websocket_pipeline_status"]
+__all__ = ["router", "websocket_pipeline_status", "websocket_logs_stream"]

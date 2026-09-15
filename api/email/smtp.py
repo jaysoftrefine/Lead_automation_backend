@@ -15,6 +15,8 @@ from email_campaigns.db import (
     update_smtp_account,
     delete_smtp_account,
     set_default_smtp_account,
+    get_outreach_smtp_routing,
+    save_outreach_smtp_routing,
 )
 from email_campaigns.smtp_sender import test_smtp_connection
 
@@ -155,3 +157,27 @@ def test_smtp(body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         cfg = get_smtp_config()
     ok, msg = test_smtp_connection(cfg)
     return {"status": "success" if ok else "failed", "message": msg, "connected": ok}
+
+
+@router.get("/smtp/outreach-routing")
+def get_outreach_routing_endpoint() -> Dict[str, Any]:
+    """Get active SMTP account assignments for Company and Freelancer outreach."""
+    return {"status": "success", "data": get_outreach_smtp_routing()}
+
+
+@router.post("/smtp/outreach-routing")
+def save_outreach_routing_endpoint(body: Dict[str, Any]) -> Dict[str, Any]:
+    """Set active SMTP account assignments and sending mode for outreach."""
+    save_outreach_smtp_routing(
+        company_smtp_account_id=body.get("company_smtp_account_id", ""),
+        freelancer_smtp_account_id=body.get("freelancer_smtp_account_id", ""),
+        company_smtp_account_ids=body.get("company_smtp_account_ids"),
+        freelancer_smtp_account_ids=body.get("freelancer_smtp_account_ids"),
+        sending_mode=body.get("sending_mode"),
+        smtp_rotation=body.get("smtp_rotation"),
+    )
+    return {
+        "status": "success",
+        "message": "Outreach routing saved successfully.",
+        "data": get_outreach_smtp_routing(),
+    }

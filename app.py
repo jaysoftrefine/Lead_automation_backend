@@ -8,13 +8,13 @@ from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.routes import router as api_router, websocket_pipeline_status
+from api.routes import router as api_router, websocket_pipeline_status, websocket_logs_stream
 from api.eu_startups import router as eu_startups_router
 from api.email import router as email_router, websocket_campaigns_progress
 from api.personal import router as personal_router
 from email_campaigns.ws_manager import campaign_ws_manager
 from config.settings import settings
-from core.logging import logger
+from core.logging import logger, log_stream_manager
 from db.sqlite import sqlite_manager
 from eu_startups.db import create_database as create_eu_database
 from email_campaigns.db import init_email_tables
@@ -75,12 +75,20 @@ async def ws_email_campaigns_alias(websocket: WebSocket):
     await websocket_campaigns_progress(websocket)
 
 
+@app.websocket("/ws/logs")
+async def ws_logs_alias(websocket: WebSocket):
+    """Direct root alias for terminal and application logs streaming websocket."""
+    await websocket_logs_stream(websocket)
+
+
 @app.on_event("startup")
 async def startup_event():
     """Verify and initialize all database schemas on startup without fail."""
     import asyncio
     try:
-        campaign_ws_manager.set_loop(asyncio.get_running_loop())
+        loop = asyncio.get_running_loop()
+        campaign_ws_manager.set_loop(loop)
+        log_stream_manager.set_loop(loop)
     except Exception:
         pass
     logger.info("Initializing and verifying database schemas...")
