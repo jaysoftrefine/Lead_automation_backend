@@ -308,6 +308,15 @@ def create_smtp_account(data: dict) -> dict:
     conn = get_connection()
     cur = conn.cursor()
 
+    smtp_user_key = str(data.get("smtp_user") or "").strip().lower()
+    if smtp_user_key:
+        existing = cur.execute(
+            "SELECT * FROM smtp_accounts WHERE LOWER(smtp_user) = ?", (smtp_user_key,)
+        ).fetchone()
+        if existing:
+            conn.close()
+            return dict(existing)
+
     account_id = str(uuid.uuid4())
     count = cur.execute("SELECT COUNT(*) FROM smtp_accounts").fetchone()[0]
     is_default = bool(data.get("is_default") or count == 0)
@@ -439,7 +448,32 @@ def delete_smtp_account(account_id: str) -> bool:
         return False
 
     was_default = bool(row[0])
+    del_id = str(account_id).strip()
     cur.execute("DELETE FROM smtp_accounts WHERE id = ?", (account_id,))
+
+    # Clean up any routing references pointing to the deleted account
+    try:
+        cfg = cur.execute("SELECT * FROM smtp_config WHERE id = 1").fetchone()
+        if cfg:
+            d = dict(cfg)
+            updates = []
+            params = []
+            if d.get("company_smtp_account_id") == del_id:
+                updates.append("company_smtp_account_id = ''")
+            if d.get("freelancer_smtp_account_id") == del_id:
+                updates.append("freelancer_smtp_account_id = ''")
+            co_ids = _parse_account_ids(d.get("company_smtp_account_ids"))
+            if del_id in co_ids:
+                updates.append("company_smtp_account_ids = ?")
+                params.append(json.dumps([x for x in co_ids if x != del_id]))
+            free_ids = _parse_account_ids(d.get("freelancer_smtp_account_ids"))
+            if del_id in free_ids:
+                updates.append("freelancer_smtp_account_ids = ?")
+                params.append(json.dumps([x for x in free_ids if x != del_id]))
+            if updates:
+                cur.execute(f"UPDATE smtp_config SET {', '.join(updates)} WHERE id = 1", params)
+    except Exception:
+        pass
 
     if was_default:
         first = cur.execute("SELECT id FROM smtp_accounts ORDER BY created_at ASC LIMIT 1").fetchone()
@@ -555,6 +589,181 @@ def save_smtp_config(host: str, port: int, user: str, password: str,
 
     conn.commit()
     conn.close()
+
+
+def _parse_account_ids(raw: Any) -> list:
+    if isinstance(raw, list):
+        return [str(x).strip() for x in raw if str(x).strip()]
+    if isinstance(raw, str) and raw.strip():
+        try:
+            val = json.loads(raw)
+            if isinstance(val, list):
+                return [str(x).strip() for x in val if str(x).strip()]
+        except Exception:
+            return [x.strip() for x in raw.split(",") if x.strip()]
+    return []
+
+
+def get_outreach_smtp_routing() -> dict:
+    """Return configured or auto-detected SMTP account IDs and sending strategy for outreach."""
+    from config.settings import settings
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        row = cur.execute("SELECT * FROM smtp_config WHERE id = 1").fetchone()
+        d = dict(row) if row else {}
+
+        co_id = d.get("company_smtp_account_id") or ""
+        free_id = d.get("freelancer_smtp_account_id") or ""
+        co_ids = _parse_account_ids(d.get("company_smtp_account_ids"))
+        free_ids = _parse_account_ids(d.get("freelancer_smtp_account_ids"))
+
+        valid_rows = cur.execute("SELECT id FROM smtp_accounts").fetchall()
+        valid_ids = {r[0] for r in valid_rows}
+
+        co_ids = [aid for aid in co_ids if aid in valid_ids]
+        free_ids = [aid for aid in free_ids if aid in valid_ids]
+        if co_id not in valid_ids:
+            co_id = co_ids[0] if co_ids else ""
+        if free_id not in valid_ids:
+            free_id = free_ids[0] if free_ids else ""
+
+        sending_mode = (d.get("sending_mode") or getattr(settings, "outreach_sending_mode", "both")) or "both"
+        if sending_mode not in ("both", "company", "freelancer"):
+            sending_mode = "both"
+        smtp_rotation = (d.get("smtp_rotation") or getattr(settings, "outreach_smtp_rotation", "random")) or "random"
+
+        # Auto-detect if not set
+        if not co_id and not co_ids:
+            acc = cur.execute("""
+                SELECT id FROM smtp_accounts
+                WHERE LOWER(smtp_user) = 'sales@softrefine.com'
+                   OR LOWER(name) LIKE '%company%'
+                   OR LOWER(name) LIKE '%stephan%'
+                   OR LOWER(from_name) LIKE '%stephan%'
+                ORDER BY is_default DESC, created_at ASC LIMIT 1
+            """).fetchone()
+            if not acc:
+                acc = cur.execute("SELECT id FROM smtp_accounts ORDER BY is_default DESC, created_at ASC LIMIT 1").fetchone()
+            if acc:
+                co_id = acc[0]
+
+        if not free_id and not free_ids:
+            acc = cur.execute("""
+                SELECT id FROM smtp_accounts
+                WHERE LOWER(name) LIKE '%freelancer%'
+                   OR LOWER(name) LIKE '%personal%'
+                   OR LOWER(name) LIKE '%shani%'
+                   OR LOWER(from_name) LIKE '%shani%'
+                ORDER BY is_default DESC, created_at ASC LIMIT 1
+            """).fetchone()
+            if not acc:
+                acc = cur.execute("SELECT id FROM smtp_accounts ORDER BY is_default DESC, created_at ASC LIMIT 1").fetchone()
+            if acc:
+                free_id = acc[0]
+
+        return {
+            "company_smtp_account_id": co_id,
+            "freelancer_smtp_account_id": free_id,
+            "company_smtp_account_ids": co_ids,
+            "freelancer_smtp_account_ids": free_ids,
+            "sending_mode": sending_mode,
+            "smtp_rotation": smtp_rotation,
+        }
+    finally:
+        conn.close()
+
+
+def save_outreach_smtp_routing(
+    company_smtp_account_id: Optional[str] = None,
+    freelancer_smtp_account_id: Optional[str] = None,
+    company_smtp_account_ids: Optional[list] = None,
+    freelancer_smtp_account_ids: Optional[list] = None,
+    sending_mode: Optional[str] = None,
+    smtp_rotation: Optional[str] = None,
+) -> None:
+    """Persist SMTP routing mapping, pool selections, and sending strategy for outreach."""
+    s_mode = (sending_mode or "").strip().lower() or "both"
+    if s_mode not in ("both", "company", "freelancer"):
+        s_mode = "both"
+    s_rot = (smtp_rotation or "").strip() or "random"
+
+    parsed_co_ids = _parse_account_ids(company_smtp_account_ids)
+    parsed_free_ids = _parse_account_ids(freelancer_smtp_account_ids)
+
+    co_id = company_smtp_account_id or (parsed_co_ids[0] if parsed_co_ids else "")
+    free_id = freelancer_smtp_account_id or (parsed_free_ids[0] if parsed_free_ids else "")
+    co_ids_json = json.dumps(parsed_co_ids)
+    free_ids_json = json.dumps(parsed_free_ids)
+
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            UPDATE smtp_config SET
+                company_smtp_account_id = ?,
+                freelancer_smtp_account_id = ?,
+                company_smtp_account_ids = ?,
+                freelancer_smtp_account_ids = ?,
+                sending_mode = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = 1
+        """, (co_id, free_id, co_ids_json, free_ids_json, s_mode))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_all_active_smtp_configs() -> list:
+    """Return all valid configured SMTP accounts."""
+    accounts = list_smtp_accounts()
+    valid = []
+    for a in accounts:
+        cfg = get_smtp_config(a["id"])
+        if cfg and cfg.get("smtp_user") and cfg.get("smtp_pass"):
+            valid.append(cfg)
+    return valid
+
+
+def get_outreach_smtp_config(
+    lead_type: Optional[str] = None,
+    exclude_account_id: Optional[str] = None,
+) -> dict:
+    """Return an SMTP configuration based on target lead_type pool."""
+    import random
+    routing = get_outreach_smtp_routing()
+    lt = (lead_type or "").strip().lower()
+
+    pool_ids = []
+    if lt == "company":
+        pool_ids = routing.get("company_smtp_account_ids") or []
+        if not pool_ids and routing.get("company_smtp_account_id"):
+            pool_ids = [routing["company_smtp_account_id"]]
+    elif lt in ("personal", "freelancer"):
+        pool_ids = routing.get("freelancer_smtp_account_ids") or []
+        if not pool_ids and routing.get("freelancer_smtp_account_id"):
+            pool_ids = [routing["freelancer_smtp_account_id"]]
+
+    if pool_ids:
+        configs = []
+        for aid in pool_ids:
+            cfg = get_smtp_config(aid)
+            if cfg and cfg.get("smtp_user") and cfg.get("smtp_pass"):
+                configs.append(cfg)
+        if configs:
+            candidates = [c for c in configs if str(c.get("account_id") or c.get("id")) != str(exclude_account_id)]
+            pick = random.choice(candidates if candidates else configs)
+            if pick and pick.get("smtp_user"):
+                return pick
+
+    active = get_all_active_smtp_configs()
+    if active:
+        candidates = [c for c in active if str(c.get("account_id") or c.get("id")) != str(exclude_account_id)]
+        pick = random.choice(candidates if candidates else active)
+        if pick and pick.get("smtp_user"):
+            return pick
+
+    return get_smtp_config()
 
 
 # Run init on import so tables exist immediately

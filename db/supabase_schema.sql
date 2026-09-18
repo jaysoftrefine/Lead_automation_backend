@@ -35,7 +35,8 @@ CREATE TABLE IF NOT EXISTS enriched_leads (
     outreach_state          TEXT DEFAULT 'open',
     outreach_stage          INTEGER DEFAULT 1,
     next_send_at            TEXT,
-    last_sent_at            TEXT
+    last_sent_at            TEXT,
+    resolved_timezone       TEXT
 );
 
 -- Indexes for fast queries & filtering
@@ -279,6 +280,11 @@ CREATE TABLE IF NOT EXISTS smtp_config (
     from_name               TEXT DEFAULT 'HirePilot AI',
     use_ssl                 BOOLEAN DEFAULT FALSE,
     use_tls                 BOOLEAN DEFAULT TRUE,
+    company_smtp_account_id TEXT,
+    freelancer_smtp_account_id TEXT,
+    company_smtp_account_ids TEXT DEFAULT '[]',
+    freelancer_smtp_account_ids TEXT DEFAULT '[]',
+    sending_mode            TEXT DEFAULT 'both',
     updated_at              TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
