@@ -147,6 +147,9 @@ class SqliteManager:
             job_id, status, result_count=result_count, error_message=error_message
         )
 
+    def update_scheduled_job(self, job_id: str, **kwargs) -> bool:
+        return self.scheduled_jobs_repo.update_scheduled_job(job_id, **kwargs)
+
     def delete_scheduled_job(self, job_id: str) -> bool:
         return self.scheduled_jobs_repo.delete_job(job_id)
 
