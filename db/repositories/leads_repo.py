@@ -450,6 +450,7 @@ class LeadsRepository:
         next_send_at: Optional[str] = None,
         last_sent_at: Optional[str] = None,
         clear_next_send_at: bool = False,
+        resolved_timezone: Optional[str] = None,
     ) -> bool:
         """Update per-lead outreach automation fields. Only provided fields are changed."""
         conn = self.get_connection()
@@ -476,6 +477,9 @@ class LeadsRepository:
             if last_sent_at is not None:
                 sets.append("last_sent_at = ?")
                 params.append(last_sent_at)
+            if resolved_timezone is not None:
+                sets.append("resolved_timezone = ?")
+                params.append(resolved_timezone)
             if len(sets) <= 1:
                 return False
             params.append(job_url)

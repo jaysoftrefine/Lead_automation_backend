@@ -58,27 +58,27 @@ def get_eu_options() -> Dict[str, List[str]]:
             "countries": values("""
                 SELECT DISTINCT country FROM startups
                 WHERE country IS NOT NULL AND TRIM(country) <> ''
-                ORDER BY country COLLATE NOCASE
+                ORDER BY country ASC
             """),
             "states": values("""
                 SELECT DISTINCT state FROM startups
                 WHERE state IS NOT NULL AND TRIM(state) <> ''
-                ORDER BY state COLLATE NOCASE
+                ORDER BY state ASC
             """),
             "cities": values("""
                 SELECT DISTINCT city FROM startups
                 WHERE city IS NOT NULL AND TRIM(city) <> ''
-                ORDER BY city COLLATE NOCASE
+                ORDER BY city ASC
             """),
             "categories": values("""
                 SELECT DISTINCT category FROM startups
                 WHERE category IS NOT NULL AND TRIM(category) <> ''
-                ORDER BY category COLLATE NOCASE
+                ORDER BY category ASC
             """),
             "roles": values("""
                 SELECT DISTINCT role FROM people
                 WHERE role IS NOT NULL AND TRIM(role) <> ''
-                ORDER BY role COLLATE NOCASE
+                ORDER BY role ASC
             """),
         }
 
