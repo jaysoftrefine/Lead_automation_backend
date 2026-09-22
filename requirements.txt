@@ -37,8 +37,10 @@ python-multipart>=0.0.9
 # LinkedIn Feed API
 linkedin-api>=2.3.1
 
-# Web Scraping & Crawling
-beautifulsoup4>=4.12.2
-curl-cffi>=0.5.9
-lxml>=5.0.0
+# Timezone resolution (offline coordinates -> IANA timezone)
+timezonefinder>=6.5.0
+geopy>=2.4.0
+
+# Search & CoT
+ddgs>=0.1.0
 
