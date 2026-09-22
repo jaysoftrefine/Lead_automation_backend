@@ -63,21 +63,23 @@ def generate_ai_hook_and_pitch(
     if cache_key in _CACHE:
         return _CACHE[cache_key]
 
-    # Explore the internet via Tavily to get real-time intelligence about the company
+    # Explore the internet via WebSearchTool (DDGS) to get real-time intelligence about the company
     web_intel = ""
     try:
-        from enrichment.tools.web_search import TavilySearchTool
-        tavily = TavilySearchTool()
-        if tavily.api_key:
-            search_query = f"{c_name} company what does it do product technology"
-            if website:
-                search_query += f" {website}"
-            search_results = tavily.search(search_query, max_results=2)
-            if search_results:
-                snippets = [r.get("content", "")[:350].strip() for r in search_results if r.get("content")]
-                web_intel = "\n".join(snippets)
+        # TavilySearchTool is deprecated and replaced by WebSearchTool
+        # from enrichment.tools.web_search import TavilySearchTool
+        # tavily = TavilySearchTool()
+        from enrichment.tools.web_search import WebSearchTool
+        search_tool = WebSearchTool()
+        search_query = f"{c_name} company what does it do product technology"
+        if website:
+            search_query += f" {website}"
+        search_results = search_tool.search(search_query, max_results=2)
+        if search_results:
+            snippets = [r.get("content", "")[:350].strip() for r in search_results if r.get("content")]
+            web_intel = "\n".join(snippets)
     except Exception as e:
-        logger.debug(f"Tavily web exploration skipped for {c_name}: {e}")
+        logger.debug(f"Web exploration skipped for {c_name}: {e}")
 
     # Build prompt context
     details = [f"Company Name: {c_name}"]

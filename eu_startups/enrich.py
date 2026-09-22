@@ -22,10 +22,12 @@ try:
 except ImportError:
     pass
 
-try:
-    from tavily import TavilyClient
-except ImportError:
-    TavilyClient = None
+# Tavily is deprecated and commented out in favor of DDGS
+# try:
+#     from tavily import TavilyClient
+# except ImportError:
+#     TavilyClient = None
+TavilyClient = None
 
 try:
     from ddgs import DDGS
@@ -47,11 +49,12 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 DB_PATH = str(DATA_DIR / "eu_startups.db")
 
 GEMINI_API_KEY = (
-    os.environ.get("GOOGLE_API_KEY")
+    os.environ.get("GOOGLE_API_KEY_1")
+    or os.environ.get("GOOGLE_API_KEY")
     or os.environ.get("GEMINI_API_KEY")
 )
-TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
+# TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite")
 
 MAX_SEARCH_RESULTS = 5
 SLEEP_BETWEEN_COMPANIES = 0.5
@@ -61,7 +64,8 @@ if not GEMINI_API_KEY:
     raise ValueError("GOOGLE_API_KEY or GEMINI_API_KEY environment variable is missing")
 
 gemini = genai.Client(api_key=GEMINI_API_KEY)
-tavily_client = TavilyClient(api_key=TAVILY_API_KEY) if (TavilyClient and TAVILY_API_KEY) else None
+# tavily_client = TavilyClient(api_key=TAVILY_API_KEY) if (TavilyClient and TAVILY_API_KEY) else None
+tavily_client = None
 
 session = requests.Session(impersonate="chrome")
 
@@ -294,26 +298,28 @@ def search_company(company_name: str, website: Optional[str] = None) -> List[Dic
         queries.append(f'site:{clean_site} team founder impressum')
 
     all_results = []
-    tavily_working = tavily_client is not None
+    # Tavily is deprecated & commented out in favor of DDGS web search:
+    # tavily_working = tavily_client is not None
+    # for query in queries:
+    #     if tavily_working:
+    #         try:
+    #             response = tavily_client.search(
+    #                 query=query,
+    #                 search_depth="advanced",
+    #                 max_results=MAX_SEARCH_RESULTS,
+    #             )
+    #             for r in response.get("results", []):
+    #                 all_results.append({
+    #                     "title": r.get("title"),
+    #                     "url": r.get("url"),
+    #                     "content": r.get("content"),
+    #                 })
+    #         except Exception:
+    #             tavily_working = False
 
+    # Live DDGS Web Search
     for query in queries:
-        if tavily_working:
-            try:
-                response = tavily_client.search(
-                    query=query,
-                    search_depth="advanced",
-                    max_results=MAX_SEARCH_RESULTS,
-                )
-                for r in response.get("results", []):
-                    all_results.append({
-                        "title": r.get("title"),
-                        "url": r.get("url"),
-                        "content": r.get("content"),
-                    })
-            except Exception:
-                tavily_working = False
-
-        if not tavily_working and DDGS:
+        if DDGS:
             try:
                 with DDGS() as ddgs:
                     for r in ddgs.text(query, max_results=MAX_SEARCH_RESULTS):

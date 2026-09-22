@@ -183,7 +183,7 @@ def list_leads(limit: int, min_score: int, company_size: str, job_type: str, hou
 @click.option("--company", "-c", default="Anthropic", help="Test company name")
 @click.option("--title", "-t", default="Senior Python Backend Engineer", help="Test job title")
 def test_enrichment(provider: str, company: str, title: str):
-    """Test LLM agent reasoning and Tavily search on a mock job posting."""
+    """Test LLM agent reasoning and Web search on a mock job posting."""
     console.print(f"[yellow]Testing Enrichment Agent on mock job: '{title}' at '{company}'...[/yellow]")
     
     sample_job = RawJobPosting(

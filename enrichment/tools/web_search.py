@@ -1,27 +1,47 @@
-"""Tavily web search tool implementation for lead intelligence."""
+"""
+web_search.py  –  Web Search & Lead Intelligence Tools
+
+Bypasses Tavily by using DuckDuckGo Search (DDGS) and ReAct Chain-of-Thought
+Google LLM agent for contact discovery and market intelligence.
+"""
 
 from typing import List, Dict, Any, Optional
 import os
+import time
 from langchain_core.tools import tool
 from config.settings import settings
 from core.logging import logger
+from ddgs import DDGS
+from cot_search import CotSearchAgent, cot_search
 
-try:
-    from tavily import TavilyClient
-except ImportError:
-    TavilyClient = None
+# ==============================================================================
+# TAVILY SEARCH (DEPRECATED & COMMENTED OUT)
+# Replaced with Google LLM + DDGS search to avoid Tavily credit/usage limits.
+# ==============================================================================
+# try:
+#     from tavily import TavilyClient
+# except ImportError:
+#     TavilyClient = None
+#
+# class TavilySearchTool:
+#     def __init__(self, api_key: Optional[str] = None):
+#         self.api_key = api_key or settings.tavily_api_key or os.environ.get("TAVILY_API_KEY")
+#         self._client = TavilyClient(api_key=self.api_key) if (self.api_key and TavilyClient) else None
+#     def search(self, query: str, max_results: int = 5, ...):
+#         return self._client.search(...)
+# ==============================================================================
 
 
-class TavilySearchTool:
-    """Wrapper around Tavily Client for research agent execution."""
+class WebSearchTool:
+    """
+    High-resilience Web Search Tool powered by DDGS.
+    Serves as a drop-in replacement for TavilySearchTool without requiring API credits.
+    """
 
     def __init__(self, api_key: Optional[str] = None):
-        self.api_key = api_key or settings.tavily_api_key or os.environ.get("TAVILY_API_KEY")
-        self._client = None
-        if self.api_key and TavilyClient:
-            self._client = TavilyClient(api_key=self.api_key)
-        else:
-            logger.warning("TAVILY_API_KEY is not set or tavily-python is not installed.")
+        # API key parameter kept for interface compatibility, but not needed for DDGS
+        self.api_key = api_key
+        logger.info("Initialized WebSearchTool with DDGS backend (Tavily bypassed).")
 
     def search(
         self,
@@ -32,48 +52,54 @@ class TavilySearchTool:
         exclude_domains: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """
-        Execute web search for contact information, recruiter profiles, or company intelligence.
+        Execute live web search for contacts, recruiter profiles, or company intelligence.
+        Returns standardized snippets formatted identically to Tavily's output.
         """
-        if not self._client:
-            logger.warning(f"Search requested for '{query}' but TavilyClient is not initialized (missing API key).")
-            return []
+        refined_query = query.strip()
+        if include_domains:
+            domain_filter = " OR ".join([f"site:{d.strip()}" for d in include_domains if d.strip()])
+            if domain_filter:
+                refined_query = f"{refined_query} ({domain_filter})"
 
-        logger.info(f"Executing Tavily web search: '{query}' (depth: {search_depth})")
-        try:
-            kwargs: Dict[str, Any] = {
-                "query": query,
-                "max_results": max_results,
-                "search_depth": search_depth,
-            }
-            if include_domains:
-                kwargs["include_domains"] = include_domains
-            if exclude_domains:
-                kwargs["exclude_domains"] = exclude_domains
+        logger.info(f"🔎 Executing DDGS web search: '{refined_query}' (limit: {max_results})")
+        raw_results = []
+        max_attempts = 2
 
-            response = self._client.search(**kwargs)
-            results = response.get("results", [])
-            formatted = [
-                {
-                    "title": r.get("title", ""),
-                    "url": r.get("url", ""),
-                    "content": r.get("content", ""),
-                    "score": r.get("score", 0.0),
-                }
-                for r in results
-            ]
-            logger.info(f"Tavily returned {len(formatted)} results for query: '{query}'")
-            return formatted
+        for attempt in range(max_attempts):
+            try:
+                with DDGS() as ddgs:
+                    raw_results = list(ddgs.text(refined_query, max_results=max_results))
+                if raw_results:
+                    break
+            except Exception as e:
+                logger.warning(f"DDGS search attempt {attempt + 1} error for '{refined_query}': {e}")
+                time.sleep(1)
 
-        except Exception as e:
-            logger.error(f"Tavily search error for '{query}': {e}")
-            return []
+        formatted: List[Dict[str, Any]] = []
+        for r in raw_results:
+            url = r.get("href") or r.get("url") or ""
+            if exclude_domains and any(ex.lower() in url.lower() for ex in exclude_domains):
+                continue
+            formatted.append({
+                "title": r.get("title") or "",
+                "url": url,
+                "content": r.get("body") or r.get("content") or "",
+                "score": 1.0,
+            })
+
+        logger.info(f"DDGS returned {len(formatted)} results for query: '{query}'")
+        return formatted
 
 
-def get_tavily_search_tool(api_key: Optional[str] = None):
+# Drop-in alias so existing imports of TavilySearchTool continue to work seamlessly
+TavilySearchTool = WebSearchTool
+
+
+def get_web_search_tool(api_key: Optional[str] = None):
     """
-    Creates a LangChain @tool function bound to the configured Tavily search instance.
+    Creates a LangChain @tool function bound to the DDGS web search instance.
     """
-    search_service = TavilySearchTool(api_key=api_key)
+    search_service = WebSearchTool(api_key=api_key)
 
     @tool
     def search_web_for_lead_info(
@@ -81,11 +107,11 @@ def get_tavily_search_tool(api_key: Optional[str] = None):
         search_focus: str = "contacts",
     ) -> str:
         """
-        Search the live web using Tavily for company contact information, recruiter emails, phone numbers,
+        Search the live web for company contact information, recruiter emails, phone numbers,
         LinkedIn profiles of decision-makers, or company domain details.
 
         Args:
-            query: The precise search query (e.g., 'Acme Corp recruiter email OR hiring manager', 'Stripe engineering director San Francisco LinkedIn', 'info@techcompany.com phone contact')
+            query: The precise search query (e.g., 'Acme Corp recruiter email OR hiring manager', 'Stripe engineering director San Francisco LinkedIn')
             search_focus: The focus area - 'contacts', 'company_domain', or 'decision_makers'.
         """
         results = search_service.search(query=query, max_results=settings.max_search_results_per_lead)
@@ -102,3 +128,16 @@ def get_tavily_search_tool(api_key: Optional[str] = None):
         return "\n".join(formatted_output)
 
     return search_web_for_lead_info
+
+
+# Backward-compatible alias
+get_tavily_search_tool = get_web_search_tool
+
+__all__ = [
+    "WebSearchTool",
+    "TavilySearchTool",
+    "get_web_search_tool",
+    "get_tavily_search_tool",
+    "CotSearchAgent",
+    "cot_search",
+]

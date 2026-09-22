@@ -195,6 +195,9 @@ class ScheduledJobsRepository:
             cur.execute(f"UPDATE scheduled_scraping_jobs SET {', '.join(updates)} WHERE id = ?", params)
             conn.commit()
             return cur.rowcount > 0
+        finally:
+            conn.close()
+
     def update_scheduled_job(
         self,
         job_id: str,

@@ -14,8 +14,9 @@ from config.settings import settings
 from db.models import RawJobPosting, EnrichedLead, ContactPerson
 from llm.registry import LLMProviderRegistry
 from enrichment.schemas import ExtractedLeadData
-from enrichment.prompts import LEAD_ENRICHMENT_SYSTEM_PROMPT, ENRICHMENT_USER_PROMPT_TEMPLATE
-from enrichment.tools.web_search import TavilySearchTool, get_tavily_search_tool
+# Tavily is deprecated & commented out; using Google LLM + DDGS web search
+# from enrichment.tools.web_search import TavilySearchTool, get_tavily_search_tool
+from enrichment.tools.web_search import WebSearchTool, CotSearchAgent, get_web_search_tool
 from core.email_verifier import email_verifier
 
 
@@ -69,7 +70,10 @@ class LeadEnrichmentAgent:
             model_name=model_name,
         )
         self.max_tool_iterations = max_tool_iterations
-        self.tavily_tool = TavilySearchTool()
+        # self.tavily_tool = TavilySearchTool()  # Deprecated Tavily tool commented out
+        self.search_tool = WebSearchTool()
+        self.tavily_tool = self.search_tool  # Retained alias for backward compatibility
+        self.cot_agent = CotSearchAgent(verbose=False)
         self.graph = self._build_graph()
 
     def _build_graph(self):
@@ -190,7 +194,9 @@ Output your structured reasoning clearly."""
             executed.append(query)
             
             try:
-                results = self.tavily_tool.search(query=query, max_results=4, search_depth="advanced")
+                # Tavily search replaced with resilient DDGS WebSearchTool
+                # results = self.tavily_tool.search(query=query, max_results=4, search_depth="advanced")
+                results = self.search_tool.search(query=query, max_results=4, search_depth="advanced")
                 knowledge_base.append({
                     "query": query,
                     "results_count": len(results),
@@ -444,6 +450,31 @@ Respond ONLY with a valid JSON object matching this schema:
             # Execute LangGraph workflow
             final_state = self.graph.invoke(initial_state)
             structured: ExtractedLeadData = final_state.get("structured_lead") or self._robust_structured_extraction("", initial_state)
+
+            # If no contacts or emails discovered via initial synthesis, run CoT ReAct search agent (like in test2.py)
+            if not structured.contacts or not any(c.email for c in structured.contacts):
+                try:
+                    logger.info(f"🔎 [CoT ReAct Search] Running executive email discovery for '{job.company}'")
+                    cot_answer = self.cot_agent.search_lead(
+                        company=job.company,
+                        location=job.location,
+                        title=job.title,
+                        job_url=job.job_url,
+                    )
+                    discovered_contacts = self.cot_agent.parse_contacts(cot_answer)
+                    if discovered_contacts:
+                        for dc in discovered_contacts:
+                            structured.contacts.append(ContactPerson(
+                                name=dc.get("name") or "Executive",
+                                role=dc.get("role") or "Leadership",
+                                email=dc.get("email"),
+                                linkedin_url=dc.get("linkedin_url"),
+                                confidence_score=dc.get("confidence_score", 75),
+                                is_verified=dc.get("is_verified", False),
+                                verification_status=dc.get("verification_status", "unconfirmed"),
+                            ))
+                except Exception as cot_err:
+                    logger.warning(f"CoT search discovery fallback warning for '{job.company}': {cot_err}")
 
             # Real-time SMTP and DNS MX Verification of all contacts
             validated_contacts = self._verify_lead_contacts(structured.contacts, company_domain=structured.company_domain)

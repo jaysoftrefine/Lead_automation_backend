@@ -68,11 +68,21 @@ class Settings(BaseSettings):
         alias="DEFAULT_LLM_PROVIDER"
     )
 
-    # Google Gemini Settings
+    # Google Gemini Settings (Dual-account / key rotation support)
     google_api_key: Optional[str] = Field(
         default=None,
-        description="Gemini API Key",
+        description="Gemini API Key (Primary/Legacy)",
         validation_alias=AliasChoices("GEMINI_API_KEY", "GOOGLE_API_KEY")
+    )
+    google_api_key_1: Optional[str] = Field(
+        default=None,
+        description="First Google Gemini API Key",
+        validation_alias=AliasChoices("GEMINI_API_KEY_1", "GOOGLE_API_KEY_1")
+    )
+    google_api_key_2: Optional[str] = Field(
+        default=None,
+        description="Second Google Gemini API Key (Fallback account)",
+        validation_alias=AliasChoices("GEMINI_API_KEY_2", "GOOGLE_API_KEY_2")
     )
     gemini_model: str = Field(
         default="gemini-3.5-flash-lite",
@@ -87,15 +97,15 @@ class Settings(BaseSettings):
         alias="NVIDIA_API_KEY"
     )
     nvidia_model: str = Field(
-        default="meta/llama-3.3-70b-instruct",
+        default="openai/gpt-oss-20b",
         description="NVIDIA model name",
         alias="NVIDIA_MODEL"
     )
 
-    # Tavily Web Search
+    # Tavily Web Search (DEPRECATED - Replaced by Google LLM + DDGS Web Search)
     tavily_api_key: Optional[str] = Field(
         default=None,
-        description="Tavily API Key for web search",
+        description="Tavily API Key (Deprecated: replaced by Google LLM + DDGS Web Search)",
         alias="TAVILY_API_KEY"
     )
 
@@ -147,11 +157,54 @@ class Settings(BaseSettings):
         description="Default outreach state for new leads: open | closed",
         alias="OUTREACH_DEFAULT_STATE"
     )
+    outreach_stage1_time: str = Field(
+        default="10:00",
+        description="Local fire time for Stage 1 (temp1) in HH:MM format",
+        alias="OUTREACH_STAGE1_TIME"
+    )
+    outreach_stage2_time: str = Field(
+        default="19:00",
+        description="Local fire time for Stage 2 (temp2) in HH:MM format",
+        alias="OUTREACH_STAGE2_TIME"
+    )
+    outreach_stage3_time: str = Field(
+        default="10:00",
+        description="Local fire time for Stage 3 (temp3) in HH:MM format",
+        alias="OUTREACH_STAGE3_TIME"
+    )
+    outreach_sending_mode: str = Field(
+        default="scheduled",
+        description="Outreach timing mode: 'scheduled' (fire at fixed local time per timezone) or 'immediate'",
+        alias="OUTREACH_SENDING_MODE"
+    )
+    outreach_smtp_rotation: str = Field(
+        default="round_robin",
+        description="SMTP rotation strategy: 'round_robin' or 'lead_hash'",
+        alias="OUTREACH_SMTP_ROTATION"
+    )
+    outreach_default_timezone: str = Field(
+        default="America/New_York",
+        description="Fallback IANA timezone for remote/unresolved locations",
+        alias="OUTREACH_DEFAULT_TIMEZONE"
+    )
+
+    def get_google_api_keys(self) -> List[str]:
+        """Returns all configured Google/Gemini API keys without duplicates."""
+        keys: List[str] = []
+        for candidate in [self.google_api_key_1, self.google_api_key_2, self.google_api_key]:
+            if candidate and str(candidate).strip() and str(candidate).strip() not in keys:
+                keys.append(str(candidate).strip())
+        return keys
 
 
 settings = Settings()
 
 # Automatically sync GEMINI_API_KEY and GOOGLE_API_KEY in os.environ so all SDKs find it
-if settings.google_api_key:
-    os.environ["GEMINI_API_KEY"] = settings.google_api_key
-    os.environ["GOOGLE_API_KEY"] = settings.google_api_key
+google_keys = settings.get_google_api_keys()
+if google_keys:
+    os.environ["GEMINI_API_KEY"] = google_keys[0]
+    os.environ["GOOGLE_API_KEY"] = google_keys[0]
+    if len(google_keys) > 1:
+        os.environ["GOOGLE_API_KEY_2"] = google_keys[1]
+        os.environ["GEMINI_API_KEY_2"] = google_keys[1]
+

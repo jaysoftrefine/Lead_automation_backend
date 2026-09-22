@@ -16,10 +16,12 @@ from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
 from curl_cffi import requests
 
-try:
-    from tavily import TavilyClient
-except ImportError:
-    TavilyClient = None
+# Tavily is deprecated and commented out in favor of DDGS
+# try:
+#     from tavily import TavilyClient
+# except ImportError:
+#     TavilyClient = None
+TavilyClient = None
 
 try:
     from duckduckgo_search import DDGS
@@ -41,12 +43,13 @@ except ImportError:
     from scraper import scrape_startup
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
-GEMINI_API_KEY = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
-TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
+GEMINI_API_KEY = os.environ.get("GOOGLE_API_KEY_1") or os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
+# TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
 
 session = requests.Session(impersonate="chrome")
 client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
-tavily_client = TavilyClient(api_key=TAVILY_API_KEY) if (TavilyClient and TAVILY_API_KEY) else None
+# tavily_client = TavilyClient(api_key=TAVILY_API_KEY) if (TavilyClient and TAVILY_API_KEY) else None
+tavily_client = None
 
 BASE_URL = "https://www.eu-startups.com"
 
@@ -130,23 +133,23 @@ def discover_startups_ai(
     
     search_context = ""
     
-    # 1. Try Tavily Live Search
-    if tavily_client:
-        try:
-            tav_res = tavily_client.search(query=query, max_results=8, search_depth="basic")
-            for r in tav_res.get("results", []):
-                search_context += f"Title: {r.get('title')}\nURL: {r.get('url')}\nContent: {r.get('content')}\n\n"
-        except Exception as e:
-            print(f"Tavily search warning: {e}")
+    # 1. Tavily Live Search (Deprecated & Commented Out - replaced with DDGS)
+    # if tavily_client:
+    #     try:
+    #         tav_res = tavily_client.search(query=query, max_results=8, search_depth="basic")
+    #         for r in tav_res.get("results", []):
+    #             search_context += f"Title: {r.get('title')}\nURL: {r.get('url')}\nContent: {r.get('content')}\n\n"
+    #     except Exception as e:
+    #         print(f"Tavily search warning: {e}")
 
-    # 2. Fallback to DDGS if Tavily had no results
-    if not search_context and DDGS:
+    # Live DDGS Web Search
+    if DDGS:
         try:
             with DDGS() as ddgs:
                 for r in ddgs.text(query, max_results=8):
                     search_context += f"Title: {r.get('title')}\nURL: {r.get('href')}\nBody: {r.get('body')}\n\n"
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"DDGS search warning: {e}")
 
     exclude_clause = ""
     if exclude_companies:
